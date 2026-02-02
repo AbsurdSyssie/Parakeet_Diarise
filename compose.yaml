@@ -1,0 +1,16 @@
+services:
+  api:
+    build: .
+    image: parakeet-diarise:api
+    gpus: all
+    environment:
+      CUDA_LAUNCH_BLOCKING: "1"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./Output/.cache:/app/.cache
+    working_dir: /app
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]

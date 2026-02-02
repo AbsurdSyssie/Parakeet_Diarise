@@ -1,0 +1,8 @@
+.env
+Output/
+__pycache__/
+*.pyc
+*.bak
+.venv/
+test/tmp
+Examples/
