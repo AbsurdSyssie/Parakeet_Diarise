@@ -24,35 +24,44 @@ docker compose up api
 
 `POST /v1/audio/transcriptions` (multipart/form-data)
 
-Parameters:
+Parameters (multipart/form-data):
 
-- `file`: audio file (WAV/FLAC/MP3)
-- `response_format`: `verbose_json`
-- `diarization`: `true` or `false`
-- `timestamps`: `word` (default), `segment`, or `none`
-- `language`: `en`
-- `chunk_mode`: `memory` (default) or `file`
-- `chunk_only`: `true` or `false` (default `false`; returns VAD chunks without ASR)
-- `force_vad`: `off` (default; uses current energy-gate behavior) or `on` (force Silero VAD, ignore RMS gate)
-- Optional VAD overrides (per-request):
-  - `vad_sample_rate`
-  - `vad_threshold`
-  - `vad_min_speech_ms`
-  - `vad_min_silence_ms`
-  - `vad_merge_gap_ms`
-  - `vad_target_min_s`
-  - `vad_target_max_s`
-  - `vad_hard_max_s`
-  - `vad_overlap_s`
-  - `vad_speech_pad_ms`
-  - `vad_energy_gate`
-  - `vad_energy_db`
-  - `vad_energy_frame_ms`
-  - `vad_energy_min_active_ms`
-  - `vad_energy_merge_gap_ms`
-  - `vad_energy_active_skip`
-  - `vad_uniform_chunk_s`
-  - `vad_uniform_overlap_s`
+| Parameter | Allowed values | Default | Notes |
+| --- | --- | --- | --- |
+| `file` | audio file | required | WAV/FLAC/MP3 tested. |
+| `response_format` | `verbose_json` | `verbose_json` | Only supported format. |
+| `diarization` | `true` or `false` | `false` | Requires `timestamps=word`. |
+| `timestamps` | `word`, `segment`, `none` | `word` | `word` required for diarization. |
+| `language` | `en` | `en` | Passed through to response. |
+| `chunk_mode` | `memory`, `file` | `memory` | `file` writes chunks to disk. |
+| `chunk_only` | `true` or `false` | `false` | Returns VAD chunks without ASR. |
+| `trace_audio` | `true` or `false` | `false` | Enables request trace logs. |
+| `force_vad` | `off`, `on` | `off` | `on` forces Silero VAD and ignores energy gate. |
+
+Optional VAD overrides (per-request). If omitted, environment defaults apply:
+
+| Parameter | Allowed values | Default |
+| --- | --- | --- |
+| `vad_sample_rate` | int | env `VAD_SAMPLE_RATE` (default `16000`) |
+| `vad_threshold` | float | env `VAD_THRESHOLD` (default `0.38`) |
+| `vad_min_speech_ms` | int | env `VAD_MIN_SPEECH_MS` (default `250`) |
+| `vad_min_silence_ms` | int | env `VAD_MIN_SILENCE_MS` (default `300`) |
+| `vad_merge_gap_ms` | int | env `VAD_MERGE_GAP_MS` (default `200`) |
+| `vad_target_min_s` | float | env `VAD_TARGET_MIN_S` (default `10.0`) |
+| `vad_target_max_s` | float | env `VAD_TARGET_MAX_S` (default `20.0`) |
+| `vad_hard_max_s` | float | env `VAD_HARD_MAX_S` (default `30.0`) |
+| `vad_overlap_s` | float | env `VAD_OVERLAP_S` (default `1.0`) |
+| `vad_speech_pad_ms` | int | env `VAD_SPEECH_PAD_MS` (default `0`) |
+| `vad_energy_gate` | `true` or `false` | env `VAD_ENERGY_GATE` (default `0`) |
+| `vad_energy_db` | float | env `VAD_ENERGY_DB` (default `-35`) |
+| `vad_energy_frame_ms` | int | env `VAD_ENERGY_FRAME_MS` (default `100`) |
+| `vad_energy_min_active_ms` | int | env `VAD_ENERGY_MIN_ACTIVE_MS` (default `500`) |
+| `vad_energy_merge_gap_ms` | int | env `VAD_ENERGY_MERGE_GAP_MS` (default `800`) |
+| `vad_energy_active_skip` | float | env `VAD_ENERGY_ACTIVE_SKIP` (default `0.85`) |
+| `vad_uniform_chunk_s` | float | env `VAD_UNIFORM_CHUNK_S` (default `30`) |
+| `vad_uniform_overlap_s` | float | env `VAD_UNIFORM_OVERLAP_S` (default `1.0`) |
+
+Note: The FastAPI `/docs` page now enumerates these options and defaults directly in the schema.
 
 Example:
 

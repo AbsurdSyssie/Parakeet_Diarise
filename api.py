@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 import os
-from typing import Optional
+from typing import Optional, Literal
 
 import torchaudio
 import torch
@@ -235,32 +235,110 @@ def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
     file: UploadFile = File(...),
-    response_format: str = Form("verbose_json"),
-    diarization: bool = Form(False),
-    timestamps: str = Form("word"),
-    language: str = Form("en"),
-    chunk_mode: str = Form("memory"),
-    chunk_only: bool = Form(False),
-    trace_audio: bool = Form(False),
-    force_vad: str = Form("off"),
-    vad_sample_rate: Optional[int] = Form(None),
-    vad_threshold: Optional[float] = Form(None),
-    vad_min_speech_ms: Optional[int] = Form(None),
-    vad_min_silence_ms: Optional[int] = Form(None),
-    vad_merge_gap_ms: Optional[int] = Form(None),
-    vad_target_min_s: Optional[float] = Form(None),
-    vad_target_max_s: Optional[float] = Form(None),
-    vad_hard_max_s: Optional[float] = Form(None),
-    vad_overlap_s: Optional[float] = Form(None),
-    vad_speech_pad_ms: Optional[int] = Form(None),
-    vad_energy_gate: Optional[bool] = Form(None),
-    vad_energy_db: Optional[float] = Form(None),
-    vad_energy_frame_ms: Optional[int] = Form(None),
-    vad_energy_min_active_ms: Optional[int] = Form(None),
-    vad_energy_merge_gap_ms: Optional[int] = Form(None),
-    vad_energy_active_skip: Optional[float] = Form(None),
-    vad_uniform_chunk_s: Optional[float] = Form(None),
-    vad_uniform_overlap_s: Optional[float] = Form(None),
+    response_format: Literal["verbose_json"] = Form(
+        "verbose_json",
+        description="Only supported response format.",
+    ),
+    diarization: bool = Form(
+        False,
+        description="Enable Sortformer diarization. Requires timestamps=word.",
+    ),
+    timestamps: Literal["word", "segment", "none"] = Form(
+        "word",
+        description="word, segment, or none. word required for diarization.",
+    ),
+    language: str = Form(
+        "en",
+        description="Currently only 'en' is supported.",
+    ),
+    chunk_mode: Literal["memory", "file"] = Form(
+        "memory",
+        description="memory (default) or file (writes chunk WAVs to disk).",
+    ),
+    chunk_only: bool = Form(
+        False,
+        description="Return VAD chunks only; skips ASR.",
+    ),
+    trace_audio: bool = Form(
+        False,
+        description="Emit per-request trace logs for ingest/decode/VAD.",
+    ),
+    force_vad: Literal["off", "on"] = Form(
+        "off",
+        description="off (default) or on (force Silero VAD, ignore energy gate).",
+    ),
+    vad_sample_rate: Optional[int] = Form(
+        None,
+        description="Override VAD sample rate (default env VAD_SAMPLE_RATE=16000).",
+    ),
+    vad_threshold: Optional[float] = Form(
+        None,
+        description="Silero threshold (default env VAD_THRESHOLD=0.38).",
+    ),
+    vad_min_speech_ms: Optional[int] = Form(
+        None,
+        description="Minimum speech duration (ms). Default env VAD_MIN_SPEECH_MS=250.",
+    ),
+    vad_min_silence_ms: Optional[int] = Form(
+        None,
+        description="Minimum silence duration (ms). Default env VAD_MIN_SILENCE_MS=300.",
+    ),
+    vad_merge_gap_ms: Optional[int] = Form(
+        None,
+        description="Gap to merge speech segments (ms). Default env VAD_MERGE_GAP_MS=200.",
+    ),
+    vad_target_min_s: Optional[float] = Form(
+        None,
+        description="Target min chunk length (s). Default env VAD_TARGET_MIN_S=10.0.",
+    ),
+    vad_target_max_s: Optional[float] = Form(
+        None,
+        description="Target max chunk length (s). Default env VAD_TARGET_MAX_S=20.0.",
+    ),
+    vad_hard_max_s: Optional[float] = Form(
+        None,
+        description="Hard max chunk length (s). Default env VAD_HARD_MAX_S=30.0.",
+    ),
+    vad_overlap_s: Optional[float] = Form(
+        None,
+        description="Chunk overlap (s). Default env VAD_OVERLAP_S=1.0.",
+    ),
+    vad_speech_pad_ms: Optional[int] = Form(
+        None,
+        description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=0.",
+    ),
+    vad_energy_gate: Optional[bool] = Form(
+        None,
+        description="Enable/disable energy gate (default env VAD_ENERGY_GATE=0).",
+    ),
+    vad_energy_db: Optional[float] = Form(
+        None,
+        description="Energy gate threshold (dB). Default env VAD_ENERGY_DB=-35.",
+    ),
+    vad_energy_frame_ms: Optional[int] = Form(
+        None,
+        description="Energy gate frame size (ms). Default env VAD_ENERGY_FRAME_MS=100.",
+    ),
+    vad_energy_min_active_ms: Optional[int] = Form(
+        None,
+        description="Energy gate min active duration (ms). Default env VAD_ENERGY_MIN_ACTIVE_MS=500.",
+    ),
+    vad_energy_merge_gap_ms: Optional[int] = Form(
+        None,
+        description="Energy gate merge gap (ms). Default env VAD_ENERGY_MERGE_GAP_MS=800.",
+    ),
+    vad_energy_active_skip: Optional[float] = Form(
+        None,
+        description="Skip Silero if active ratio >= this. Default env VAD_ENERGY_ACTIVE_SKIP=0.85.",
+    ),
+    vad_uniform_chunk_s: Optional[float] = Form(
+        None,
+        description="Uniform chunk length (s) when energy gate skips. Default env VAD_UNIFORM_CHUNK_S=30.",
+    ),
+    vad_uniform_overlap_s: Optional[float] = Form(
+        None,
+        description="Uniform chunk overlap (s). Default env VAD_UNIFORM_OVERLAP_S=1.0.",
+    ),
 ):
     if response_format != "verbose_json":
         raise HTTPException(status_code=400, detail="Only verbose_json is supported")
