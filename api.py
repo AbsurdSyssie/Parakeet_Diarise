@@ -42,6 +42,61 @@ def _get_env_float(name: str, default: str) -> float:
     return float(os.getenv(name, default))
 
 
+def _get_env_bool(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _disable_cuda_graphs(asr_model, verbose: bool = False) -> bool:
+    disabled = False
+    if hasattr(asr_model, "cfg") and hasattr(asr_model.cfg, "decoding"):
+        if hasattr(asr_model.cfg.decoding, "greedy"):
+            from omegaconf import open_dict
+
+            with open_dict(asr_model.cfg.decoding.greedy):
+                asr_model.cfg.decoding.greedy.use_cuda_graph_decoder = False
+                if verbose:
+                    print("  Disabled CUDA graphs in cfg.decoding.greedy")
+                disabled = True
+
+    if hasattr(asr_model, "decoding") and hasattr(asr_model.decoding, "decoding"):
+        dc = asr_model.decoding.decoding
+        if hasattr(dc, "use_cuda_graph_decoder"):
+            dc.use_cuda_graph_decoder = False
+            if verbose:
+                print("  Disabled use_cuda_graph_decoder in decoding.decoding")
+            disabled = True
+        if hasattr(dc, "decoding_computer"):
+            dcomp = dc.decoding_computer
+            if hasattr(dcomp, "allow_cuda_graphs"):
+                dcomp.allow_cuda_graphs = False
+            if hasattr(dcomp, "disable_cuda_graphs"):
+                dcomp.disable_cuda_graphs()
+            if hasattr(dcomp, "cuda_graphs_mode"):
+                dcomp.cuda_graphs_mode = None
+            if verbose:
+                print("  Disabled CUDA graphs in decoding_computer")
+            disabled = True
+
+    for attr_name in ["joint", "joint_0", "joint_1", "joint_2", "joint_3"]:
+        if hasattr(asr_model, attr_name):
+            joint = getattr(asr_model, attr_name)
+            if hasattr(joint, "decoding") and hasattr(joint.decoding, "decoding"):
+                jdc = joint.decoding.decoding
+                if hasattr(jdc, "use_cuda_graph_decoder"):
+                    jdc.use_cuda_graph_decoder = False
+                if hasattr(jdc, "decoding_computer"):
+                    jdcomp = jdc.decoding_computer
+                    if hasattr(jdcomp, "allow_cuda_graphs"):
+                        jdcomp.allow_cuda_graphs = False
+                    if hasattr(jdcomp, "cuda_graphs_mode"):
+                        jdcomp.cuda_graphs_mode = None
+                if verbose:
+                    print(f"  Disabled CUDA graphs in {attr_name}")
+                disabled = True
+
+    return disabled
+
+
 def cuda_mem():
     if not torch.cuda.is_available():
         return {}
@@ -146,6 +201,9 @@ def _startup_load_model() -> None:
     asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
     asr_model = asr_model.to(device)
     _patch_transcribe_dataloader_no_lhotse(asr_model)
+    if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
+        if _disable_cuda_graphs(asr_model, verbose=True):
+            print("  CUDA graphs disabled for decoding")
 
     # Warmup to amortize first-request overhead.
     dummy = torch.zeros(16000, dtype=torch.float32)

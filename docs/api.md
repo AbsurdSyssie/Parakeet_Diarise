@@ -198,6 +198,7 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 - `DIARIZE_EMPTY_CACHE=1` runs `gc.collect()` after diarization and resets CUDA peak stats (model weights remain resident).
 - `DIARIZE_TF32=1` enables TF32 in CUDA matmul/cudnn for diarization to improve throughput at the cost of strict determinism.
 - Recommendation: keep `DIARIZE_TF32=0` for now; we did not see a consistent speedup.
+- `DISABLE_CUDA_GRAPHS=1` disables NeMo RNNT CUDA graph decoding to mitigate intermittent CUDA illegal memory access errors.
 - Energy gate fix validated via an in‑container 1s silence test using `run_vad_chunks_in_memory_from_waveform`.
 
 ## Recent benchmarks
