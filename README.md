@@ -132,6 +132,7 @@ Use `.env.example` as the template. Common settings:
 - `VAD_ENERGY_ACTIVE_SKIP`
 - `VAD_UNIFORM_CHUNK_S`
 - `VAD_UNIFORM_OVERLAP_S`
+- `DISABLE_CUDA_GRAPHS` (1 to disable NeMo RNNT CUDA graph decoding)
 
 See `docs/api.md` for detailed VAD/energy-gate behavior and defaults.
 
