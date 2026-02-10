@@ -36,22 +36,22 @@ Parameters (multipart/form-data):
 | `chunk_mode` | `memory`, `file` | `memory` | `file` writes chunks to disk. |
 | `chunk_only` | `true` or `false` | `false` | Returns VAD chunks without ASR. |
 | `trace_audio` | `true` or `false` | `false` | Enables request trace logs. |
-| `force_vad` | `off`, `on` | `off` | `on` forces Silero VAD and ignores energy gate. |
+| `force_vad` | `off`, `on` | `on` | `on` forces Silero VAD and ignores energy gate. |
 
 Optional VAD overrides (per-request). If omitted, environment defaults apply:
 
 | Parameter | Allowed values | Default |
 | --- | --- | --- |
 | `vad_sample_rate` | int | env `VAD_SAMPLE_RATE` (default `16000`) |
-| `vad_threshold` | float | env `VAD_THRESHOLD` (default `0.38`) |
-| `vad_min_speech_ms` | int | env `VAD_MIN_SPEECH_MS` (default `250`) |
-| `vad_min_silence_ms` | int | env `VAD_MIN_SILENCE_MS` (default `300`) |
+| `vad_threshold` | float | env `VAD_THRESHOLD` (default `0.30`) |
+| `vad_min_speech_ms` | int | env `VAD_MIN_SPEECH_MS` (default `150`) |
+| `vad_min_silence_ms` | int | env `VAD_MIN_SILENCE_MS` (default `220`) |
 | `vad_merge_gap_ms` | int | env `VAD_MERGE_GAP_MS` (default `200`) |
 | `vad_target_min_s` | float | env `VAD_TARGET_MIN_S` (default `10.0`) |
 | `vad_target_max_s` | float | env `VAD_TARGET_MAX_S` (default `20.0`) |
 | `vad_hard_max_s` | float | env `VAD_HARD_MAX_S` (default `30.0`) |
 | `vad_overlap_s` | float | env `VAD_OVERLAP_S` (default `1.0`) |
-| `vad_speech_pad_ms` | int | env `VAD_SPEECH_PAD_MS` (default `0`) |
+| `vad_speech_pad_ms` | int | env `VAD_SPEECH_PAD_MS` (default `250`) |
 | `vad_energy_gate` | `true` or `false` | env `VAD_ENERGY_GATE` (default `0`) |
 | `vad_energy_db` | float | env `VAD_ENERGY_DB` (default `-35`) |
 | `vad_energy_frame_ms` | int | env `VAD_ENERGY_FRAME_MS` (default `100`) |

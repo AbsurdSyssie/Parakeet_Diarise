@@ -322,8 +322,8 @@ async def transcribe(
         description="Emit per-request trace logs for ingest/decode/VAD.",
     ),
     force_vad: Literal["off", "on"] = Form(
-        "off",
-        description="off (default) or on (force Silero VAD, ignore energy gate).",
+        "on",
+        description="off or on (default; force Silero VAD, ignore energy gate).",
     ),
     vad_sample_rate: Optional[int] = Form(
         None,
@@ -331,15 +331,15 @@ async def transcribe(
     ),
     vad_threshold: Optional[float] = Form(
         None,
-        description="Silero threshold (default env VAD_THRESHOLD=0.38).",
+        description="Silero threshold (default env VAD_THRESHOLD=0.30).",
     ),
     vad_min_speech_ms: Optional[int] = Form(
         None,
-        description="Minimum speech duration (ms). Default env VAD_MIN_SPEECH_MS=250.",
+        description="Minimum speech duration (ms). Default env VAD_MIN_SPEECH_MS=150.",
     ),
     vad_min_silence_ms: Optional[int] = Form(
         None,
-        description="Minimum silence duration (ms). Default env VAD_MIN_SILENCE_MS=300.",
+        description="Minimum silence duration (ms). Default env VAD_MIN_SILENCE_MS=220.",
     ),
     vad_merge_gap_ms: Optional[int] = Form(
         None,
@@ -363,7 +363,7 @@ async def transcribe(
     ),
     vad_speech_pad_ms: Optional[int] = Form(
         None,
-        description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=0.",
+        description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=250.",
     ),
     vad_energy_gate: Optional[bool] = Form(
         None,
@@ -465,12 +465,12 @@ async def transcribe(
                 f"samples={vad_samples} duration_s={vad_duration:.3f}"
             )
 
-        vad_threshold = vad_threshold if vad_threshold is not None else _get_env_float("VAD_THRESHOLD", "0.38")
+        vad_threshold = vad_threshold if vad_threshold is not None else _get_env_float("VAD_THRESHOLD", "0.30")
         vad_min_speech_ms = (
-            vad_min_speech_ms if vad_min_speech_ms is not None else _get_env_int("VAD_MIN_SPEECH_MS", "250")
+            vad_min_speech_ms if vad_min_speech_ms is not None else _get_env_int("VAD_MIN_SPEECH_MS", "150")
         )
         vad_min_silence_ms = (
-            vad_min_silence_ms if vad_min_silence_ms is not None else _get_env_int("VAD_MIN_SILENCE_MS", "300")
+            vad_min_silence_ms if vad_min_silence_ms is not None else _get_env_int("VAD_MIN_SILENCE_MS", "220")
         )
         vad_merge_gap_ms = (
             vad_merge_gap_ms if vad_merge_gap_ms is not None else _get_env_int("VAD_MERGE_GAP_MS", "200")
@@ -488,7 +488,7 @@ async def transcribe(
             vad_overlap_s if vad_overlap_s is not None else _get_env_float("VAD_OVERLAP_S", "1.0")
         )
         vad_speech_pad_ms = (
-            vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "0")
+            vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "250")
         )
         pad_s = vad_speech_pad_ms / 1000.0
         energy_gate_override = None if force_vad == "off" else False
