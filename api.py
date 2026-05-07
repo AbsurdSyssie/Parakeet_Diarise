@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 from typing import Optional, Literal
 
+from dotenv import load_dotenv
 import torchaudio
 import torch
 import nemo.collections.asr as nemo_asr
@@ -27,11 +28,46 @@ from vad_chunk import (
     run_vad_chunks_in_memory_from_waveform,
 )
 
+load_dotenv()
+
 app = FastAPI()
 _ASR_MODEL = None
 _DIAR_MODEL = None
-MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
+ASR_MODELS = {
+    "parakeet-0.6b": "nvidia/parakeet-tdt-0.6b-v3",
+    "parakeet-1.1b": "nvidia/parakeet-tdt-1.1b",
+}
+DEFAULT_MODEL_KEY = "parakeet-0.6b"
+MODEL_KEY = os.getenv("ASR_MODEL", DEFAULT_MODEL_KEY).strip()
+HF_TOKEN = (
+    os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_TOKEN")
+    or os.getenv("HUGGING_FACE_HUB_TOKEN")
+)
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+
+
+def resolve_asr_model(model_key: str) -> str:
+    """Resolve a short model alias or direct HF/NVIDIA model name."""
+    if not model_key:
+        return ASR_MODELS[DEFAULT_MODEL_KEY]
+    return ASR_MODELS.get(model_key, model_key)
+
+
+MODEL_NAME = resolve_asr_model(MODEL_KEY)
+
+
+def load_asr_model(model_name: str):
+    """Load an ASR model, passing HF auth when configured."""
+    kwargs = {"model_name": model_name}
+    if HF_TOKEN:
+        kwargs["use_auth_token"] = HF_TOKEN
+
+    try:
+        return nemo_asr.models.ASRModel.from_pretrained(**kwargs)
+    except TypeError:
+        kwargs.pop("use_auth_token", None)
+        return nemo_asr.models.ASRModel.from_pretrained(**kwargs)
 
 
 def _get_env_int(name: str, default: str) -> int:
@@ -186,6 +222,9 @@ def health():
     return {
         "ok": True,
         "asr_loaded": _ASR_MODEL is not None,
+        "asr_model_key": MODEL_KEY,
+        "asr_model_name": MODEL_NAME,
+        "hf_token_configured": bool(HF_TOKEN),
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
@@ -198,7 +237,8 @@ def _startup_load_model() -> None:
         return
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
+    print(f"Loading ASR model: key={MODEL_KEY!r}, model_name={MODEL_NAME!r}")
+    asr_model = load_asr_model(MODEL_NAME)
     asr_model = asr_model.to(device)
     _patch_transcribe_dataloader_no_lhotse(asr_model)
     if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
