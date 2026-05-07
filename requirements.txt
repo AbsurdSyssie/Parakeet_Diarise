@@ -4,3 +4,4 @@ nemo_toolkit[asr]==2.6.1
 fastapi==0.115.6
 uvicorn==0.34.0
 python-multipart==0.0.9
+python-dotenv==1.0.1
