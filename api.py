@@ -1,73 +1,48 @@
 #!/usr/bin/env python3
-"""ASR API: VAD chunking + Parakeet transcription + optional diarization."""
+"""ASR API: VAD chunking + configurable ASR + optional diarization."""
 
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 from pathlib import Path
-import os
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 from dotenv import load_dotenv
 import torchaudio
 import torch
-import nemo.collections.asr as nemo_asr
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from api_response import build_response
+from asr_backend import ASRConfig, load_asr_backend, resolve_asr_model
 from asr_merge import parse_chunk_filename
 from chunk_transcribe import (
+    _patch_transcribe_dataloader_no_lhotse,
     transcribe_chunks_in_memory_mode,
     transcribe_chunks_with_model_mode,
-    _patch_transcribe_dataloader_no_lhotse,
 )
 from diarize_align import assign_speakers, group_words_into_segments
-from vad_chunk import (
-    run_vad_chunks_from_waveform,
-    run_vad_chunks_in_memory_from_waveform,
-)
+from vad_chunk import run_vad_chunks_from_waveform, run_vad_chunks_in_memory_from_waveform
 
 load_dotenv()
 
 app = FastAPI()
 _ASR_MODEL = None
 _DIAR_MODEL = None
-ASR_MODELS = {
-    "parakeet-0.6b": "nvidia/parakeet-tdt-0.6b-v3",
-    "parakeet-1.1b": "nvidia/parakeet-tdt-1.1b",
-}
-DEFAULT_MODEL_KEY = "parakeet-0.6b"
+
+ASR_BACKEND = os.getenv("ASR_BACKEND", "nemo").strip().lower()
+DEFAULT_MODEL_KEY = "parakeet-0.6b" if ASR_BACKEND == "nemo" else "medical-whisper-large-v3"
 MODEL_KEY = os.getenv("ASR_MODEL", DEFAULT_MODEL_KEY).strip()
+MODEL_NAME = resolve_asr_model(ASR_BACKEND, MODEL_KEY)
 HF_TOKEN = (
     os.getenv("HF_TOKEN")
     or os.getenv("HUGGINGFACE_TOKEN")
     or os.getenv("HUGGING_FACE_HUB_TOKEN")
 )
+ASR_LANGUAGE = os.getenv("ASR_LANGUAGE", "en").strip()
+ASR_TASK = os.getenv("ASR_TASK", "transcribe").strip()
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
-
-
-def resolve_asr_model(model_key: str) -> str:
-    """Resolve a short model alias or direct HF/NVIDIA model name."""
-    if not model_key:
-        return ASR_MODELS[DEFAULT_MODEL_KEY]
-    return ASR_MODELS.get(model_key, model_key)
-
-
-MODEL_NAME = resolve_asr_model(MODEL_KEY)
-
-
-def load_asr_model(model_name: str):
-    """Load an ASR model, passing HF auth when configured."""
-    kwargs = {"model_name": model_name}
-    if HF_TOKEN:
-        kwargs["use_auth_token"] = HF_TOKEN
-
-    try:
-        return nemo_asr.models.ASRModel.from_pretrained(**kwargs)
-    except TypeError:
-        kwargs.pop("use_auth_token", None)
-        return nemo_asr.models.ASRModel.from_pretrained(**kwargs)
 
 
 def _get_env_int(name: str, default: str) -> int:
@@ -166,36 +141,7 @@ def _chunk_debug_from_in_memory(chunks: list[dict], duration: float, pad_s: floa
     return out
 
 
-def _log_chunk_durations(
-    chunks: list[dict],
-    duration: float,
-    pad_s: float,
-    trace_id: str,
-) -> None:
-    if not chunks:
-        return
-    sample_rate = int(chunks[0].get("sample_rate", 0))
-    if sample_rate <= 0:
-        return
-    for label, chunk in (("first", chunks[0]), ("last", chunks[-1])):
-        start_s = float(chunk["start_s"])
-        end_s = float(chunk["end_s"])
-        effective_start_s = max(0.0, start_s - pad_s)
-        effective_end_s = min(duration, end_s + pad_s)
-        expected = effective_end_s - effective_start_s
-        actual = float(chunk["waveform"].shape[-1]) / sample_rate
-        delta = actual - expected
-        print(
-            f"[{trace_id}] chunk_duration {label} "
-            f"expected_s={expected:.3f} actual_s={actual:.3f} delta_s={delta:.3f}"
-        )
-
-
-def _chunk_debug_from_files(
-    chunk_paths: list[Path],
-    duration: float,
-    pad_s: float,
-) -> list[dict]:
+def _chunk_debug_from_files(chunk_paths: list[Path], duration: float, pad_s: float) -> list[dict]:
     out = []
     for idx, path in enumerate(sorted(chunk_paths), start=1):
         chunk_id, start_s, end_s = parse_chunk_filename(path.name)
@@ -217,13 +163,36 @@ def _chunk_debug_from_files(
     return out
 
 
+def _log_chunk_durations(chunks: list[dict], duration: float, pad_s: float, trace_id: str) -> None:
+    if not chunks:
+        return
+    sample_rate = int(chunks[0].get("sample_rate", 0))
+    if sample_rate <= 0:
+        return
+    for label, chunk in (("first", chunks[0]), ("last", chunks[-1])):
+        start_s = float(chunk["start_s"])
+        end_s = float(chunk["end_s"])
+        effective_start_s = max(0.0, start_s - pad_s)
+        effective_end_s = min(duration, end_s + pad_s)
+        expected = effective_end_s - effective_start_s
+        actual = float(chunk["waveform"].shape[-1]) / sample_rate
+        delta = actual - expected
+        print(
+            f"[{trace_id}] chunk_duration {label} "
+            f"expected_s={expected:.3f} actual_s={actual:.3f} delta_s={delta:.3f}"
+        )
+
+
 @app.get("/health")
 def health():
     return {
         "ok": True,
         "asr_loaded": _ASR_MODEL is not None,
+        "asr_backend": ASR_BACKEND,
         "asr_model_key": MODEL_KEY,
         "asr_model_name": MODEL_NAME,
+        "asr_language": ASR_LANGUAGE,
+        "asr_task": ASR_TASK,
         "hf_token_configured": bool(HF_TOKEN),
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
@@ -237,13 +206,26 @@ def _startup_load_model() -> None:
         return
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Loading ASR model: key={MODEL_KEY!r}, model_name={MODEL_NAME!r}")
-    asr_model = load_asr_model(MODEL_NAME)
+    config = ASRConfig(
+        backend=ASR_BACKEND,
+        model_key=MODEL_KEY,
+        model_name=MODEL_NAME,
+        hf_token=HF_TOKEN,
+        language=ASR_LANGUAGE,
+        task=ASR_TASK,
+    )
+    print(
+        "Loading ASR model: "
+        f"backend={ASR_BACKEND!r}, key={MODEL_KEY!r}, model_name={MODEL_NAME!r}"
+    )
+    asr_model = load_asr_backend(config)
     asr_model = asr_model.to(device)
-    _patch_transcribe_dataloader_no_lhotse(asr_model)
-    if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
-        if _disable_cuda_graphs(asr_model, verbose=True):
-            print("  CUDA graphs disabled for decoding")
+
+    if ASR_BACKEND == "nemo":
+        _patch_transcribe_dataloader_no_lhotse(asr_model)
+        if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
+            if _disable_cuda_graphs(asr_model, verbose=True):
+                print("  CUDA graphs disabled for decoding")
 
     # Warmup to amortize first-request overhead.
     dummy = torch.zeros(16000, dtype=torch.float32)
@@ -253,6 +235,7 @@ def _startup_load_model() -> None:
         verbose=False,
         batch_size=1,
         num_workers=0,
+        return_hypotheses=True,
     )
 
     _ASR_MODEL = asr_model
@@ -265,9 +248,7 @@ def _get_diar_model():
 
     from nemo.collections.asr.models import SortformerEncLabelModel
 
-    model = SortformerEncLabelModel.from_pretrained(
-        "nvidia/diar_streaming_sortformer_4spk-v2.1"
-    )
+    model = SortformerEncLabelModel.from_pretrained("nvidia/diar_streaming_sortformer_4spk-v2.1")
     model.eval()
     if torch.cuda.is_available():
         model.to(torch.device("cuda"))
@@ -297,10 +278,7 @@ def _normalize_speaker(label: str) -> str:
 
 def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]:
     model = _get_diar_model()
-    if waveform.dim() == 1:
-        wav = waveform.unsqueeze(0)
-    else:
-        wav = waveform
+    wav = waveform.unsqueeze(0) if waveform.dim() == 1 else waveform
     mono_path = tmpdir / "diarize_mono16k.wav"
     torchaudio.save(str(mono_path), wav, sr)
     predicted_segments = model.diarize(audio=[str(mono_path)], batch_size=1)
@@ -313,12 +291,11 @@ def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]
             speaker = seg.get("speaker", seg.get("speaker_label", seg.get("label", "UNKNOWN")))
         elif isinstance(seg, str):
             parts = seg.strip().split()
-            if len(parts) >= 3:
-                start = float(parts[0])
-                end = float(parts[1])
-                speaker = parts[2]
-            else:
+            if len(parts) < 3:
                 continue
+            start = float(parts[0])
+            end = float(parts[1])
+            speaker = parts[2]
         elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
             start = float(seg[0])
             end = float(seg[1])
@@ -330,148 +307,101 @@ def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]
     return turns
 
 
+def _build_vad_params(
+    *,
+    vad_threshold: float,
+    vad_min_speech_ms: int,
+    vad_min_silence_ms: int,
+    vad_merge_gap_ms: int,
+    vad_target_min_s: float,
+    vad_target_max_s: float,
+    vad_hard_max_s: float,
+    vad_overlap_s: float,
+    vad_speech_pad_ms: int,
+    force_vad: str,
+    vad_energy_gate: Optional[bool],
+    vad_energy_db: Optional[float],
+    vad_energy_frame_ms: Optional[int],
+    vad_energy_min_active_ms: Optional[int],
+    vad_energy_merge_gap_ms: Optional[int],
+    vad_energy_active_skip: Optional[float],
+    vad_uniform_chunk_s: Optional[float],
+    vad_uniform_overlap_s: Optional[float],
+) -> dict:
+    return {
+        "threshold": vad_threshold,
+        "min_speech_ms": vad_min_speech_ms,
+        "min_silence_ms": vad_min_silence_ms,
+        "merge_gap_ms": vad_merge_gap_ms,
+        "target_min_s": vad_target_min_s,
+        "target_max_s": vad_target_max_s,
+        "hard_max_s": vad_hard_max_s,
+        "overlap_s": vad_overlap_s,
+        "speech_pad_ms": vad_speech_pad_ms,
+        "force_vad": force_vad,
+        "energy_gate": vad_energy_gate,
+        "energy_db": vad_energy_db,
+        "energy_frame_ms": vad_energy_frame_ms,
+        "energy_min_active_ms": vad_energy_min_active_ms,
+        "energy_merge_gap_ms": vad_energy_merge_gap_ms,
+        "energy_active_skip": vad_energy_active_skip,
+        "uniform_chunk_s": vad_uniform_chunk_s,
+        "uniform_overlap_s": vad_uniform_overlap_s,
+    }
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
     file: UploadFile = File(...),
-    response_format: Literal["verbose_json"] = Form(
-        "verbose_json",
-        description="Only supported response format.",
-    ),
-    diarization: bool = Form(
-        False,
-        description="Enable Sortformer diarization. Requires timestamps=word.",
-    ),
-    timestamps: Literal["word", "segment", "none"] = Form(
-        "word",
-        description="word, segment, or none. word required for diarization.",
-    ),
-    language: str = Form(
-        "en",
-        description="Currently only 'en' is supported.",
-    ),
-    chunk_mode: Literal["memory", "file"] = Form(
-        "memory",
-        description="memory (default) or file (writes chunk WAVs to disk).",
-    ),
-    chunk_only: bool = Form(
-        False,
-        description="Return VAD chunks only; skips ASR.",
-    ),
-    trace_audio: bool = Form(
-        False,
-        description="Emit per-request trace logs for ingest/decode/VAD.",
-    ),
-    force_vad: Literal["off", "on"] = Form(
-        "on",
-        description="off or on (default; force Silero VAD, ignore energy gate).",
-    ),
-    vad_sample_rate: Optional[int] = Form(
-        None,
-        description="Override VAD sample rate (default env VAD_SAMPLE_RATE=16000).",
-    ),
-    vad_threshold: Optional[float] = Form(
-        None,
-        description="Silero threshold (default env VAD_THRESHOLD=0.30).",
-    ),
-    vad_min_speech_ms: Optional[int] = Form(
-        None,
-        description="Minimum speech duration (ms). Default env VAD_MIN_SPEECH_MS=150.",
-    ),
-    vad_min_silence_ms: Optional[int] = Form(
-        None,
-        description="Minimum silence duration (ms). Default env VAD_MIN_SILENCE_MS=220.",
-    ),
-    vad_merge_gap_ms: Optional[int] = Form(
-        None,
-        description="Gap to merge speech segments (ms). Default env VAD_MERGE_GAP_MS=200.",
-    ),
-    vad_target_min_s: Optional[float] = Form(
-        None,
-        description="Target min chunk length (s). Default env VAD_TARGET_MIN_S=10.0.",
-    ),
-    vad_target_max_s: Optional[float] = Form(
-        None,
-        description="Target max chunk length (s). Default env VAD_TARGET_MAX_S=20.0.",
-    ),
-    vad_hard_max_s: Optional[float] = Form(
-        None,
-        description="Hard max chunk length (s). Default env VAD_HARD_MAX_S=30.0.",
-    ),
-    vad_overlap_s: Optional[float] = Form(
-        None,
-        description="Chunk overlap (s). Default env VAD_OVERLAP_S=1.0.",
-    ),
-    vad_speech_pad_ms: Optional[int] = Form(
-        None,
-        description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=250.",
-    ),
-    vad_energy_gate: Optional[bool] = Form(
-        None,
-        description="Enable/disable energy gate (default env VAD_ENERGY_GATE=0).",
-    ),
-    vad_energy_db: Optional[float] = Form(
-        None,
-        description="Energy gate threshold (dB). Default env VAD_ENERGY_DB=-35.",
-    ),
-    vad_energy_frame_ms: Optional[int] = Form(
-        None,
-        description="Energy gate frame size (ms). Default env VAD_ENERGY_FRAME_MS=100.",
-    ),
-    vad_energy_min_active_ms: Optional[int] = Form(
-        None,
-        description="Energy gate min active duration (ms). Default env VAD_ENERGY_MIN_ACTIVE_MS=500.",
-    ),
-    vad_energy_merge_gap_ms: Optional[int] = Form(
-        None,
-        description="Energy gate merge gap (ms). Default env VAD_ENERGY_MERGE_GAP_MS=800.",
-    ),
-    vad_energy_active_skip: Optional[float] = Form(
-        None,
-        description="Skip Silero if active ratio >= this. Default env VAD_ENERGY_ACTIVE_SKIP=0.85.",
-    ),
-    vad_uniform_chunk_s: Optional[float] = Form(
-        None,
-        description="Uniform chunk length (s) when energy gate skips. Default env VAD_UNIFORM_CHUNK_S=30.",
-    ),
-    vad_uniform_overlap_s: Optional[float] = Form(
-        None,
-        description="Uniform chunk overlap (s). Default env VAD_UNIFORM_OVERLAP_S=1.0.",
-    ),
+    response_format: Literal["verbose_json"] = Form("verbose_json", description="Only supported response format."),
+    diarization: bool = Form(False, description="Enable Sortformer diarization. Requires timestamps=word."),
+    timestamps: Literal["word", "segment", "none"] = Form("word", description="word, segment, or none. word required for diarization."),
+    language: str = Form("en", description="Currently only 'en' is supported."),
+    chunk_mode: Literal["memory", "file"] = Form("memory", description="memory (default) or file (writes chunk WAVs to disk)."),
+    chunk_only: bool = Form(False, description="Return VAD chunks only; skips ASR."),
+    trace_audio: bool = Form(False, description="Emit per-request trace logs for ingest/decode/VAD."),
+    force_vad: Literal["off", "on"] = Form("on", description="off or on (default; force Silero VAD, ignore energy gate)."),
+    vad_sample_rate: Optional[int] = Form(None, description="Override VAD sample rate (default env VAD_SAMPLE_RATE=16000)."),
+    vad_threshold: Optional[float] = Form(None, description="Silero threshold (default env VAD_THRESHOLD=0.30)."),
+    vad_min_speech_ms: Optional[int] = Form(None, description="Minimum speech duration (ms). Default env VAD_MIN_SPEECH_MS=150."),
+    vad_min_silence_ms: Optional[int] = Form(None, description="Minimum silence duration (ms). Default env VAD_MIN_SILENCE_MS=220."),
+    vad_merge_gap_ms: Optional[int] = Form(None, description="Gap to merge speech segments (ms). Default env VAD_MERGE_GAP_MS=200."),
+    vad_target_min_s: Optional[float] = Form(None, description="Target min chunk length (s). Default env VAD_TARGET_MIN_S=10.0."),
+    vad_target_max_s: Optional[float] = Form(None, description="Target max chunk length (s). Default env VAD_TARGET_MAX_S=20.0."),
+    vad_hard_max_s: Optional[float] = Form(None, description="Hard max chunk length (s). Default env VAD_HARD_MAX_S=30.0."),
+    vad_overlap_s: Optional[float] = Form(None, description="Chunk overlap (s). Default env VAD_OVERLAP_S=1.0."),
+    vad_speech_pad_ms: Optional[int] = Form(None, description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=250."),
+    vad_energy_gate: Optional[bool] = Form(None, description="Enable/disable energy gate (default env VAD_ENERGY_GATE=0)."),
+    vad_energy_db: Optional[float] = Form(None, description="Energy gate threshold (dB). Default env VAD_ENERGY_DB=-35."),
+    vad_energy_frame_ms: Optional[int] = Form(None, description="Energy gate frame size (ms). Default env VAD_ENERGY_FRAME_MS=100."),
+    vad_energy_min_active_ms: Optional[int] = Form(None, description="Energy gate min active duration (ms). Default env VAD_ENERGY_MIN_ACTIVE_MS=500."),
+    vad_energy_merge_gap_ms: Optional[int] = Form(None, description="Energy gate merge gap (ms). Default env VAD_ENERGY_MERGE_GAP_MS=800."),
+    vad_energy_active_skip: Optional[float] = Form(None, description="Skip Silero if active ratio >= this. Default env VAD_ENERGY_ACTIVE_SKIP=0.85."),
+    vad_uniform_chunk_s: Optional[float] = Form(None, description="Uniform chunk length (s) when energy gate skips. Default env VAD_UNIFORM_CHUNK_S=30."),
+    vad_uniform_overlap_s: Optional[float] = Form(None, description="Uniform chunk overlap (s). Default env VAD_UNIFORM_OVERLAP_S=1.0."),
 ):
     if response_format != "verbose_json":
         raise HTTPException(status_code=400, detail="Only verbose_json is supported")
     if timestamps not in {"word", "segment", "none"}:
-        raise HTTPException(
-            status_code=400,
-            detail="timestamps must be 'word', 'segment', or 'none'",
-        )
+        raise HTTPException(status_code=400, detail="timestamps must be 'word', 'segment', or 'none'")
     if chunk_mode not in {"memory", "file"}:
         raise HTTPException(status_code=400, detail="chunk_mode must be 'memory' or 'file'")
     if diarization and timestamps != "word":
-        raise HTTPException(
-            status_code=400,
-            detail="diarization requires timestamps=word",
-        )
+        raise HTTPException(status_code=400, detail="diarization requires timestamps=word")
     if force_vad not in {"off", "on"}:
-        raise HTTPException(
-            status_code=400,
-            detail="force_vad must be 'off' or 'on'",
-        )
+        raise HTTPException(status_code=400, detail="force_vad must be 'off' or 'on'")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         start_req = time.perf_counter()
-        trace_id = None
+        trace_id = f"trace-{int(start_req * 1000)}" if trace_audio else None
         tmp_path = Path(tmpdir) / file.filename
+
         file_start = time.perf_counter()
         file_bytes = await file.read()
         tmp_path.write_bytes(file_bytes)
         file_elapsed = time.perf_counter() - file_start
         if trace_audio:
-            trace_id = f"trace-{int(start_req * 1000)}"
-            print(
-                f"[{trace_id}] ingest file={file.filename!r} bytes={len(file_bytes)} "
-                f"write_s={file_elapsed:.3f}"
-            )
+            print(f"[{trace_id}] ingest file={file.filename!r} bytes={len(file_bytes)} write_s={file_elapsed:.3f}")
 
         decode_start = time.perf_counter()
         waveform, sr = torchaudio.load(str(tmp_path))
@@ -486,88 +416,64 @@ async def transcribe(
         duration = waveform.shape[-1] / sr if waveform.numel() else 0.0
         if trace_audio:
             channels = 1 if waveform.dim() == 1 else waveform.size(0)
-            num_samples = int(waveform.shape[-1])
             print(
                 f"[{trace_id}] decode sr={sr} channels={channels} "
-                f"samples={num_samples} duration_s={duration:.3f} "
-                f"decode_s={decode_elapsed:.3f}"
+                f"samples={int(waveform.shape[-1])} duration_s={duration:.3f} decode_s={decode_elapsed:.3f}"
             )
 
         vad_waveform = waveform
         vad_sr = vad_sample_rate if vad_sample_rate is not None else VAD_SAMPLE_RATE
         if vad_sr != sr:
             vad_waveform = torchaudio.functional.resample(waveform, sr, vad_sr)
-        if trace_audio:
-            vad_samples = int(vad_waveform.shape[-1])
-            vad_duration = vad_samples / vad_sr if vad_samples else 0.0
-            print(
-                f"[{trace_id}] vad_resample sr={vad_sr} "
-                f"samples={vad_samples} duration_s={vad_duration:.3f}"
-            )
 
         vad_threshold = vad_threshold if vad_threshold is not None else _get_env_float("VAD_THRESHOLD", "0.30")
-        vad_min_speech_ms = (
-            vad_min_speech_ms if vad_min_speech_ms is not None else _get_env_int("VAD_MIN_SPEECH_MS", "150")
-        )
-        vad_min_silence_ms = (
-            vad_min_silence_ms if vad_min_silence_ms is not None else _get_env_int("VAD_MIN_SILENCE_MS", "220")
-        )
-        vad_merge_gap_ms = (
-            vad_merge_gap_ms if vad_merge_gap_ms is not None else _get_env_int("VAD_MERGE_GAP_MS", "200")
-        )
-        vad_target_min_s = (
-            vad_target_min_s if vad_target_min_s is not None else _get_env_float("VAD_TARGET_MIN_S", "10.0")
-        )
-        vad_target_max_s = (
-            vad_target_max_s if vad_target_max_s is not None else _get_env_float("VAD_TARGET_MAX_S", "20.0")
-        )
-        vad_hard_max_s = (
-            vad_hard_max_s if vad_hard_max_s is not None else _get_env_float("VAD_HARD_MAX_S", "30.0")
-        )
-        vad_overlap_s = (
-            vad_overlap_s if vad_overlap_s is not None else _get_env_float("VAD_OVERLAP_S", "1.0")
-        )
-        vad_speech_pad_ms = (
-            vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "250")
-        )
+        vad_min_speech_ms = vad_min_speech_ms if vad_min_speech_ms is not None else _get_env_int("VAD_MIN_SPEECH_MS", "150")
+        vad_min_silence_ms = vad_min_silence_ms if vad_min_silence_ms is not None else _get_env_int("VAD_MIN_SILENCE_MS", "220")
+        vad_merge_gap_ms = vad_merge_gap_ms if vad_merge_gap_ms is not None else _get_env_int("VAD_MERGE_GAP_MS", "200")
+        vad_target_min_s = vad_target_min_s if vad_target_min_s is not None else _get_env_float("VAD_TARGET_MIN_S", "10.0")
+        vad_target_max_s = vad_target_max_s if vad_target_max_s is not None else _get_env_float("VAD_TARGET_MAX_S", "20.0")
+        vad_hard_max_s = vad_hard_max_s if vad_hard_max_s is not None else _get_env_float("VAD_HARD_MAX_S", "30.0")
+        vad_overlap_s = vad_overlap_s if vad_overlap_s is not None else _get_env_float("VAD_OVERLAP_S", "1.0")
+        vad_speech_pad_ms = vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "250")
         pad_s = vad_speech_pad_ms / 1000.0
+
         energy_gate_override = None if force_vad == "off" else False
         energy_overrides = {}
-        if vad_energy_gate is not None:
-            energy_overrides["energy_gate"] = vad_energy_gate
-        if vad_energy_db is not None:
-            energy_overrides["energy_db"] = vad_energy_db
-        if vad_energy_frame_ms is not None:
-            energy_overrides["energy_frame_ms"] = vad_energy_frame_ms
-        if vad_energy_min_active_ms is not None:
-            energy_overrides["energy_min_active_ms"] = vad_energy_min_active_ms
-        if vad_energy_merge_gap_ms is not None:
-            energy_overrides["energy_merge_gap_ms"] = vad_energy_merge_gap_ms
-        if vad_energy_active_skip is not None:
-            energy_overrides["energy_active_skip"] = vad_energy_active_skip
-        if vad_uniform_chunk_s is not None:
-            energy_overrides["uniform_chunk_s"] = vad_uniform_chunk_s
-        if vad_uniform_overlap_s is not None:
-            energy_overrides["uniform_overlap_s"] = vad_uniform_overlap_s
+        for key, value in {
+            "energy_gate": vad_energy_gate,
+            "energy_db": vad_energy_db,
+            "energy_frame_ms": vad_energy_frame_ms,
+            "energy_min_active_ms": vad_energy_min_active_ms,
+            "energy_merge_gap_ms": vad_energy_merge_gap_ms,
+            "energy_active_skip": vad_energy_active_skip,
+            "uniform_chunk_s": vad_uniform_chunk_s,
+            "uniform_overlap_s": vad_uniform_overlap_s,
+        }.items():
+            if value is not None:
+                energy_overrides[key] = value
 
-        print(
-            "vad settings: "
-            f"vad_sr={vad_sr}, thr={vad_threshold}, min_speech_ms={vad_min_speech_ms}, "
-            f"min_silence_ms={vad_min_silence_ms}, merge_gap_ms={vad_merge_gap_ms}, "
-            f"target_min_s={vad_target_min_s}, target_max_s={vad_target_max_s}, "
-            f"hard_max_s={vad_hard_max_s}, overlap_s={vad_overlap_s}, "
-            f"speech_pad_ms={vad_speech_pad_ms}, force_vad={force_vad}, "
-            f"energy_gate={energy_overrides.get('energy_gate')}, "
-            f"energy_db={energy_overrides.get('energy_db')}, "
-            f"energy_frame_ms={energy_overrides.get('energy_frame_ms')}, "
-            f"energy_min_active_ms={energy_overrides.get('energy_min_active_ms')}, "
-            f"energy_merge_gap_ms={energy_overrides.get('energy_merge_gap_ms')}, "
-            f"energy_active_skip={energy_overrides.get('energy_active_skip')}, "
-            f"uniform_chunk_s={energy_overrides.get('uniform_chunk_s')}, "
-            f"uniform_overlap_s={energy_overrides.get('uniform_overlap_s')}"
+        vad_params = _build_vad_params(
+            vad_threshold=vad_threshold,
+            vad_min_speech_ms=vad_min_speech_ms,
+            vad_min_silence_ms=vad_min_silence_ms,
+            vad_merge_gap_ms=vad_merge_gap_ms,
+            vad_target_min_s=vad_target_min_s,
+            vad_target_max_s=vad_target_max_s,
+            vad_hard_max_s=vad_hard_max_s,
+            vad_overlap_s=vad_overlap_s,
+            vad_speech_pad_ms=vad_speech_pad_ms,
+            force_vad=force_vad,
+            vad_energy_gate=vad_energy_gate,
+            vad_energy_db=vad_energy_db,
+            vad_energy_frame_ms=vad_energy_frame_ms,
+            vad_energy_min_active_ms=vad_energy_min_active_ms,
+            vad_energy_merge_gap_ms=vad_energy_merge_gap_ms,
+            vad_energy_active_skip=vad_energy_active_skip,
+            vad_uniform_chunk_s=vad_uniform_chunk_s,
+            vad_uniform_overlap_s=vad_uniform_overlap_s,
         )
-
         print(f"cuda mem before vad: {cuda_mem()}")
+
         if chunk_mode == "memory":
             vad_start = time.perf_counter()
             chunks = run_vad_chunks_in_memory_from_waveform(
@@ -588,53 +494,17 @@ async def transcribe(
                 energy_overrides=energy_overrides,
             )
             vad_elapsed = time.perf_counter() - vad_start
-
-            if not chunks:
-                if trace_audio:
-                    print(f"[{trace_id}] vad_chunks count=0 mode=memory")
-                if chunk_only:
-                    return {
-                        "ok": True,
-                        "chunk_only": True,
-                        "chunk_mode": chunk_mode,
-                        "duration": duration,
-                        "sample_rate": sr,
-                        "vad_sample_rate": vad_sr,
-                        "vad_params": {
-                            "threshold": vad_threshold,
-                            "min_speech_ms": vad_min_speech_ms,
-                            "min_silence_ms": vad_min_silence_ms,
-                            "merge_gap_ms": vad_merge_gap_ms,
-                            "target_min_s": vad_target_min_s,
-                            "target_max_s": vad_target_max_s,
-                            "hard_max_s": vad_hard_max_s,
-                            "overlap_s": vad_overlap_s,
-                            "speech_pad_ms": vad_speech_pad_ms,
-                            "force_vad": force_vad,
-                            "energy_gate": vad_energy_gate,
-                            "energy_db": vad_energy_db,
-                            "energy_frame_ms": vad_energy_frame_ms,
-                            "energy_min_active_ms": vad_energy_min_active_ms,
-                            "energy_merge_gap_ms": vad_energy_merge_gap_ms,
-                            "energy_active_skip": vad_energy_active_skip,
-                            "uniform_chunk_s": vad_uniform_chunk_s,
-                            "uniform_overlap_s": vad_uniform_overlap_s,
-                        },
-                        "chunks": [],
-                    }
-                return build_response([], [], language=language, duration=duration, text="")
-
             if trace_audio and chunks:
-                first = chunks[0]
-                last = chunks[-1]
                 print(
                     f"[{trace_id}] vad_chunks count={len(chunks)} mode=memory "
-                    f"first={first['start_s']:.2f}-{first['end_s']:.2f} "
-                    f"last={last['start_s']:.2f}-{last['end_s']:.2f}"
+                    f"first={chunks[0]['start_s']:.2f}-{chunks[0]['end_s']:.2f} "
+                    f"last={chunks[-1]['start_s']:.2f}-{chunks[-1]['end_s']:.2f}"
                 )
                 _log_chunk_durations(chunks, duration, pad_s, trace_id)
 
-            if chunk_only:
+            if chunk_only or not chunks:
+                if not chunks and not chunk_only:
+                    return build_response([], [], language=language, duration=duration, text="")
                 return {
                     "ok": True,
                     "chunk_only": True,
@@ -642,20 +512,9 @@ async def transcribe(
                     "duration": duration,
                     "sample_rate": sr,
                     "vad_sample_rate": vad_sr,
-                        "vad_params": {
-                            "threshold": vad_threshold,
-                            "min_speech_ms": vad_min_speech_ms,
-                            "min_silence_ms": vad_min_silence_ms,
-                            "merge_gap_ms": vad_merge_gap_ms,
-                            "target_min_s": vad_target_min_s,
-                            "target_max_s": vad_target_max_s,
-                            "hard_max_s": vad_hard_max_s,
-                            "overlap_s": vad_overlap_s,
-                            "speech_pad_ms": vad_speech_pad_ms,
-                            "force_vad": force_vad,
-                        },
-                        "chunks": _chunk_debug_from_in_memory(chunks, duration, pad_s),
-                    }
+                    "vad_params": vad_params,
+                    "chunks": _chunk_debug_from_in_memory(chunks, duration, pad_s) if chunks else [],
+                }
 
             start_asr = time.perf_counter()
             result = transcribe_chunks_in_memory_mode(
@@ -665,12 +524,6 @@ async def transcribe(
                 timestamps=timestamps,
                 pad_left_s=pad_s,
             )
-            elapsed = time.perf_counter() - start_asr
-            print(
-                f"file write {file_elapsed:.2f}s; decode {decode_elapsed:.2f}s; "
-                f"vad {vad_elapsed:.2f}s; chunks transcribed in {elapsed:.2f}s"
-            )
-            print(f"cuda mem after asr: {cuda_mem()}")
         else:
             chunk_dir = Path(tmpdir) / "chunks"
             vad_start = time.perf_counter()
@@ -693,44 +546,17 @@ async def transcribe(
                 energy_overrides=energy_overrides,
             )
             vad_elapsed = time.perf_counter() - vad_start
-
-            if not chunk_paths:
-                if trace_audio:
-                    print(f"[{trace_id}] vad_chunks count=0 mode=file")
-                if chunk_only:
-                    return {
-                        "ok": True,
-                        "chunk_only": True,
-                        "chunk_mode": chunk_mode,
-                        "duration": duration,
-                        "sample_rate": sr,
-                        "vad_sample_rate": vad_sr,
-                        "vad_params": {
-                            "threshold": vad_threshold,
-                            "min_speech_ms": vad_min_speech_ms,
-                            "min_silence_ms": vad_min_silence_ms,
-                            "merge_gap_ms": vad_merge_gap_ms,
-                            "target_min_s": vad_target_min_s,
-                            "target_max_s": vad_target_max_s,
-                            "hard_max_s": vad_hard_max_s,
-                            "overlap_s": vad_overlap_s,
-                            "speech_pad_ms": vad_speech_pad_ms,
-                            "force_vad": force_vad,
-                        },
-                        "chunks": [],
-                    }
-                return build_response([], [], language=language, duration=duration, text="")
-
             if trace_audio and chunk_paths:
-                first_id, first_start, first_end = parse_chunk_filename(chunk_paths[0].name)
-                last_id, last_start, last_end = parse_chunk_filename(chunk_paths[-1].name)
+                _, first_start, first_end = parse_chunk_filename(chunk_paths[0].name)
+                _, last_start, last_end = parse_chunk_filename(chunk_paths[-1].name)
                 print(
                     f"[{trace_id}] vad_chunks count={len(chunk_paths)} mode=file "
-                    f"first={first_start:.2f}-{first_end:.2f} "
-                    f"last={last_start:.2f}-{last_end:.2f}"
+                    f"first={first_start:.2f}-{first_end:.2f} last={last_start:.2f}-{last_end:.2f}"
                 )
 
-            if chunk_only:
+            if chunk_only or not chunk_paths:
+                if not chunk_paths and not chunk_only:
+                    return build_response([], [], language=language, duration=duration, text="")
                 return {
                     "ok": True,
                     "chunk_only": True,
@@ -738,20 +564,9 @@ async def transcribe(
                     "duration": duration,
                     "sample_rate": sr,
                     "vad_sample_rate": vad_sr,
-                        "vad_params": {
-                            "threshold": vad_threshold,
-                            "min_speech_ms": vad_min_speech_ms,
-                            "min_silence_ms": vad_min_silence_ms,
-                            "merge_gap_ms": vad_merge_gap_ms,
-                            "target_min_s": vad_target_min_s,
-                            "target_max_s": vad_target_max_s,
-                            "hard_max_s": vad_hard_max_s,
-                            "overlap_s": vad_overlap_s,
-                            "speech_pad_ms": vad_speech_pad_ms,
-                            "force_vad": force_vad,
-                        },
-                        "chunks": _chunk_debug_from_files(chunk_paths, duration, pad_s),
-                    }
+                    "vad_params": vad_params,
+                    "chunks": _chunk_debug_from_files(chunk_paths, duration, pad_s) if chunk_paths else [],
+                }
 
             start_asr = time.perf_counter()
             result = transcribe_chunks_with_model_mode(
@@ -762,18 +577,16 @@ async def transcribe(
                 batch_size=4,
                 timestamps=timestamps,
             )
-            elapsed = time.perf_counter() - start_asr
-            print(
-                f"file write {file_elapsed:.2f}s; decode {decode_elapsed:.2f}s; "
-                f"vad {vad_elapsed:.2f}s; chunks transcribed in {elapsed:.2f}s"
-            )
-            print(f"cuda mem after asr: {cuda_mem()}")
+
+        elapsed = time.perf_counter() - start_asr
+        print(
+            f"file write {file_elapsed:.2f}s; decode {decode_elapsed:.2f}s; "
+            f"vad {vad_elapsed:.2f}s; chunks transcribed in {elapsed:.2f}s"
+        )
+        print(f"cuda mem after asr: {cuda_mem()}")
 
         text_override = result["text"]
-        if timestamps == "word":
-            words = result["words"]
-        else:
-            words = []
+        words = result["words"] if timestamps == "word" else []
 
         if diarization:
             start_diar = time.perf_counter()
@@ -782,9 +595,7 @@ async def transcribe(
             print(f"diarization in {diar_elapsed:.2f}s")
             words_with_speaker = assign_speakers(words, turns)
         else:
-            words_with_speaker = [
-                {**w, "speaker": w.get("speaker") or "UNKNOWN"} for w in words
-            ]
+            words_with_speaker = [{**w, "speaker": w.get("speaker") or "UNKNOWN"} for w in words]
 
         start_merge = time.perf_counter()
         if timestamps == "word":
@@ -802,6 +613,7 @@ async def transcribe(
         merge_elapsed = time.perf_counter() - start_merge
         total_elapsed = time.perf_counter() - start_req
         print(f"merge in {merge_elapsed:.2f}s; total request {total_elapsed:.2f}s")
+
         return build_response(
             words_with_speaker,
             segments,
