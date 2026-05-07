@@ -107,13 +107,25 @@ class WhisperASRBackend:
         generate_kwargs = {"task": self.task}
         if self.language:
             generate_kwargs["language"] = self.language
+        if timestamps:
+            # Force WhisperTimeStampLogitsProcessor in generate(). The pipeline's
+            # return_timestamps="word" should also do this, but passing it here
+            # makes the generation config explicit for Whisper backends.
+            generate_kwargs["return_timestamps"] = True
+            generate_kwargs["return_token_timestamps"] = True
 
-        outputs = self.pipe(
-            prepared,
-            batch_size=batch_size,
-            return_timestamps=return_timestamps,
-            generate_kwargs=generate_kwargs,
-        )
+        pipe_call_kwargs: dict[str, Any] = {
+            "batch_size": batch_size,
+            "return_timestamps": return_timestamps,
+            "generate_kwargs": generate_kwargs,
+        }
+        if timestamps:
+            # Keep chunks under Whisper's 30s timestamp window and add a small
+            # right stride so cut-off words near chunk edges still get endings.
+            pipe_call_kwargs["chunk_length_s"] = 30
+            pipe_call_kwargs["stride_length_s"] = (0, 2)
+
+        outputs = self.pipe(prepared, **pipe_call_kwargs)
         if isinstance(outputs, dict):
             outputs = [outputs]
 
@@ -147,13 +159,18 @@ class WhisperASRBackend:
             if not isinstance(ts, (list, tuple)) or len(ts) < 2:
                 continue
             start, end = ts[0], ts[1]
-            if start is None or end is None:
+            if start is None:
                 continue
             try:
                 start_f = float(start)
-                end_f = float(end)
             except (TypeError, ValueError):
                 continue
+            try:
+                end_f = float(end) if end is not None else start_f + 0.01
+            except (TypeError, ValueError):
+                end_f = start_f + 0.01
+            if end_f <= start_f:
+                end_f = start_f + 0.01
             if not chunk_text:
                 continue
 
