@@ -305,7 +305,7 @@ class FasterWhisperASRBackend:
 
 
 class TransformersASRBackend:
-    """Generic Hugging Face Transformers ASR adapter (Cohere, etc.)."""
+    """Generic Hugging Face Transformers ASR adapter."""
 
     def __init__(
         self,
@@ -317,36 +317,57 @@ class TransformersASRBackend:
         stride_length_s: int | tuple[int, int] | None = None,
         language: str = "en",
     ) -> None:
-        from transformers import AutoProcessor, CohereAsrForConditionalGeneration
-
         self.model_name = model_name
         self.return_timestamps = return_timestamps
         self.chunk_length_s = chunk_length_s
         self.stride_length_s = stride_length_s
         self.language = language
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        # Generic/custom ASR models are not guaranteed to be fp16-safe. Cohere's
+        # remote code masks attention with -1e9, which overflows float16.
+        self.torch_dtype = torch.float32
+        self._is_cohere = model_name.lower() == "coherelabs/cohere-transcribe-03-2026"
 
-        model_kwargs: dict[str, Any] = {
-            "trust_remote_code": trust_remote_code,
+        if self._is_cohere:
+            from transformers import AutoProcessor, CohereAsrForConditionalGeneration
+
+            model_kwargs: dict[str, Any] = {
+                "trust_remote_code": trust_remote_code,
+                "torch_dtype": self.torch_dtype,
+            }
+            if hf_token:
+                model_kwargs["token"] = hf_token
+
+            self.processor = AutoProcessor.from_pretrained(
+                model_name,
+                trust_remote_code=trust_remote_code,
+                token=hf_token,
+            )
+            self.model = CohereAsrForConditionalGeneration.from_pretrained(
+                model_name,
+                **model_kwargs,
+            ).to(self.device)
+            # Cohere's processor returns 'length', which its generate path uses
+            # even though the base Transformers validator does not see it.
+            self.model._validate_model_kwargs = lambda kwargs, model_kwargs=None: None
+            return
+
+        from transformers import pipeline
+
+        pipe_kwargs: dict[str, Any] = {
+            "task": "automatic-speech-recognition",
+            "model": model_name,
+            "device": self.device,
             "torch_dtype": self.torch_dtype,
+            "trust_remote_code": trust_remote_code,
         }
         if hf_token:
-            model_kwargs["token"] = hf_token
+            pipe_kwargs["token"] = hf_token
 
-        self.processor = AutoProcessor.from_pretrained(
-            model_name, trust_remote_code=trust_remote_code, token=hf_token,
-        )
-        self.model = CohereAsrForConditionalGeneration.from_pretrained(
-            model_name, **model_kwargs,
-        ).to(self.device)
-
-        # CohereAsrForConditionalGeneration.forward doesn't declare 'length' but
-        # its custom generate() and prepare_inputs_for_generation consume it.
-        # _validate_model_kwargs in transformers 5.x rejects undeclared kwargs.
-        self.model._validate_model_kwargs = lambda kwargs, model_kwargs=None: None
+        self.pipe = pipeline(**pipe_kwargs)
 
     def to(self, device: str | torch.device):
+        # Transformers pipeline placement is configured at load time.
         return self
 
     def transcribe(
@@ -360,37 +381,61 @@ class TransformersASRBackend:
         **_: Any,
     ) -> list[SimpleHypothesis] | list[str]:
         prepared = [self._prepare_input(item) for item in inputs]
+        if self._is_cohere:
+            hypotheses = [self._transcribe_cohere(item) for item in prepared]
+            if return_hypotheses:
+                return hypotheses
+            return [hyp.text for hyp in hypotheses]
 
-        hypotheses: list[SimpleHypothesis] = []
-        for audio in prepared:
-            proc_inputs = self.processor(
-                audio, sampling_rate=16000, return_tensors="pt", language=self.language,
-            )
-            audio_chunk_index = proc_inputs.get("audio_chunk_index")
-            proc_inputs = self._prepare_processor_inputs(proc_inputs)
+        # Some custom ASR pipelines emit variable-length feature tensors that do
+        # not collate correctly in batches. Keep the generic path conservative.
+        pipe_call_kwargs: dict[str, Any] = {"batch_size": 1}
 
-            generate_kwargs = dict(proc_inputs)
-            generate_kwargs["max_new_tokens"] = 256
+        should_return_timestamps = timestamps and self.return_timestamps
+        if should_return_timestamps:
+            pipe_call_kwargs["return_timestamps"] = True
+        if self.chunk_length_s:
+            pipe_call_kwargs["chunk_length_s"] = self.chunk_length_s
+        if self.stride_length_s:
+            pipe_call_kwargs["stride_length_s"] = self.stride_length_s
 
-            with torch.no_grad():
-                output_ids = self.model.generate(**generate_kwargs)
+        outputs = self.pipe(prepared, **pipe_call_kwargs)
+        if isinstance(outputs, dict):
+            outputs = [outputs]
 
-            decode_kwargs: dict[str, Any] = {"skip_special_tokens": True}
-            if audio_chunk_index is not None:
-                decode_kwargs["audio_chunk_index"] = audio_chunk_index
-                decode_kwargs["language"] = self.language
-
-            text = self.processor.decode(output_ids, **decode_kwargs)
-            if isinstance(text, list):
-                text = " ".join(str(item).strip() for item in text if str(item).strip())
-            hypotheses.append(SimpleHypothesis(text=str(text).strip(), timestamp={"word": [], "segment": []}))
+        hypotheses = [
+            self._to_hypothesis(output, timestamps=should_return_timestamps)
+            for output in outputs
+        ]
 
         if return_hypotheses:
             return hypotheses
         return [hyp.text for hyp in hypotheses]
 
-    def _prepare_processor_inputs(self, proc_inputs: Any) -> dict[str, Any]:
-        """Move processor outputs to the model device without corrupting control tensors."""
+    def _transcribe_cohere(self, audio: Any) -> SimpleHypothesis:
+        proc_inputs = self.processor(
+            audio,
+            sampling_rate=16000,
+            return_tensors="pt",
+            language=self.language,
+        )
+        audio_chunk_index = proc_inputs.get("audio_chunk_index")
+        proc_inputs = self._prepare_cohere_inputs(proc_inputs)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(**proc_inputs, max_new_tokens=256)
+
+        decode_kwargs: dict[str, Any] = {"skip_special_tokens": True}
+        if audio_chunk_index is not None:
+            decode_kwargs["audio_chunk_index"] = audio_chunk_index
+            decode_kwargs["language"] = self.language
+
+        text = self.processor.decode(output_ids, **decode_kwargs)
+        if isinstance(text, list):
+            text = " ".join(str(item).strip() for item in text if str(item).strip())
+        return SimpleHypothesis(text=str(text).strip(), timestamp={"word": [], "segment": []})
+
+    def _prepare_cohere_inputs(self, proc_inputs: Any) -> dict[str, Any]:
         target_device = getattr(self.model, "device", torch.device(self.device))
         target_dtype = getattr(self.model, "dtype", self.torch_dtype)
 
@@ -407,7 +452,6 @@ class TransformersASRBackend:
         return moved
 
     def _normalize_cohere_input_features(self, proc_inputs: dict[str, Any]) -> None:
-        """Match Cohere's Conformer encoder layout: [batch, frames, mel_bins]."""
         features = proc_inputs.get("input_features")
         if not isinstance(features, torch.Tensor) or features.dim() != 3:
             return
@@ -428,20 +472,55 @@ class TransformersASRBackend:
 
     def _prepare_input(self, item: Any) -> Any:
         if isinstance(item, (str, Path)):
-            from transformers.audio_utils import load_audio
-            return load_audio(str(item), sampling_rate=16000)
+            if self._is_cohere:
+                from transformers.audio_utils import load_audio
+
+                return load_audio(str(item), sampling_rate=16000)
+            return str(item)
 
         if isinstance(item, torch.Tensor):
             tensor = item.detach().cpu()
             if tensor.dim() == 2 and tensor.size(0) == 1:
                 tensor = tensor.squeeze(0)
-            return tensor.float().numpy()
+            if self._is_cohere:
+                return tensor.float().numpy()
+            return {"array": tensor.float().numpy(), "sampling_rate": 16000}
 
         return item
 
     def _to_hypothesis(self, output: dict[str, Any], timestamps: bool) -> SimpleHypothesis:
         text = str(output.get("text") or "").strip()
-        return SimpleHypothesis(text=text, timestamp={"word": [], "segment": []})
+        if not timestamps:
+            return SimpleHypothesis(text=text, timestamp={"word": [], "segment": []})
+
+        words: list[dict[str, Any]] = []
+        segments: list[dict[str, Any]] = []
+        for chunk in output.get("chunks") or []:
+            chunk_text = str(chunk.get("text") or "").strip()
+            ts = chunk.get("timestamp") or (None, None)
+
+            if not chunk_text:
+                continue
+            if not isinstance(ts, (list, tuple)) or len(ts) < 2:
+                continue
+
+            start, end = ts[0], ts[1]
+            if start is None or end is None:
+                continue
+
+            try:
+                start_f = float(start)
+                end_f = float(end)
+            except (TypeError, ValueError):
+                continue
+
+            if end_f <= start_f:
+                continue
+
+            words.append({"word": chunk_text, "start": start_f, "end": end_f})
+            segments.append({"segment": chunk_text, "start": start_f, "end": end_f})
+
+        return SimpleHypothesis(text=text, timestamp={"word": words, "segment": segments})
 
 
 def load_nemo_asr_model(config: ASRConfig):

@@ -1,6 +1,4 @@
-import os
 import unittest
-from unittest.mock import MagicMock, patch
 
 import torch
 
@@ -119,6 +117,7 @@ class TestTransformersASRBackendHypothesis(unittest.TestCase):
     def setUp(self):
         self.backend = TransformersASRBackend.__new__(TransformersASRBackend)
         self.backend.return_timestamps = True
+        self.backend._is_cohere = False
 
     def test_to_hypothesis_no_timestamps(self):
         hyp = self.backend._to_hypothesis({"text": "hello world"}, timestamps=False)
@@ -135,63 +134,50 @@ class TestTransformersASRBackendHypothesis(unittest.TestCase):
         self.assertEqual(hyp.text, "")
 
     def test_to_hypothesis_with_timestamps(self):
-        hyp = self.backend._to_hypothesis({"text": "hello world"}, timestamps=True)
+        hyp = self.backend._to_hypothesis(
+            {
+                "text": "hello world",
+                "chunks": [{"text": "hello", "timestamp": (0.0, 0.5)}],
+            },
+            timestamps=True,
+        )
         self.assertEqual(hyp.text, "hello world")
-        self.assertEqual(len(hyp.timestamp["word"]), 0)
+        self.assertEqual(hyp.timestamp["word"], [{"word": "hello", "start": 0.0, "end": 0.5}])
+        self.assertEqual(hyp.timestamp["segment"], [{"segment": "hello", "start": 0.0, "end": 0.5}])
+
+    def test_to_hypothesis_skips_invalid_timestamps(self):
+        hyp = self.backend._to_hypothesis(
+            {
+                "text": "hello world",
+                "chunks": [
+                    {"text": "hello", "timestamp": (None, 0.5)},
+                    {"text": "world", "timestamp": (1.0, 1.0)},
+                ],
+            },
+            timestamps=True,
+        )
+        self.assertEqual(hyp.timestamp["word"], [])
 
 
 class TestTransformersASRBackendPrepareInput(unittest.TestCase):
     def setUp(self):
         self.backend = TransformersASRBackend.__new__(TransformersASRBackend)
+        self.backend._is_cohere = False
 
     def test_prepare_tensor_input(self):
         import numpy as np
         tensor = torch.randn(16000)
         result = self.backend._prepare_input(tensor)
-        self.assertIsInstance(result, np.ndarray)
+        self.assertIsInstance(result, dict)
+        self.assertIsInstance(result["array"], np.ndarray)
+        self.assertEqual(result["sampling_rate"], 16000)
 
     def test_prepare_tensor_2d_input(self):
         import numpy as np
         tensor = torch.randn(1, 16000)
         result = self.backend._prepare_input(tensor)
-        self.assertIsInstance(result, np.ndarray)
-        self.assertEqual(result.shape, (16000,))
-
-
-class TestTransformersASRBackendProcessorInputs(unittest.TestCase):
-    def setUp(self):
-        self.backend = TransformersASRBackend.__new__(TransformersASRBackend)
-        self.backend.device = "cpu"
-        self.backend.torch_dtype = torch.float16
-        self.backend.model = MagicMock()
-        self.backend.model.device = torch.device("cpu")
-        self.backend.model.dtype = torch.float16
-        self.backend.processor = MagicMock()
-        self.backend.processor.feature_extractor = MagicMock()
-        self.backend.processor.feature_extractor.feature_size = 128
-
-    def test_prepare_processor_inputs_transposes_cohere_features(self):
-        proc_inputs = {
-            "input_features": torch.randn(1, 128, 1000, dtype=torch.float32),
-            "length": torch.tensor([1000], dtype=torch.int64),
-        }
-
-        result = self.backend._prepare_processor_inputs(proc_inputs)
-
-        self.assertEqual(result["input_features"].shape, (1, 1000, 128))
-        self.assertEqual(result["input_features"].dtype, torch.float16)
-        self.assertEqual(result["length"].dtype, torch.int64)
-
-    def test_prepare_processor_inputs_keeps_already_transposed_features(self):
-        proc_inputs = {
-            "input_features": torch.randn(1, 1000, 128, dtype=torch.float32),
-            "length": torch.tensor([1000], dtype=torch.int64),
-        }
-
-        result = self.backend._prepare_processor_inputs(proc_inputs)
-
-        self.assertEqual(result["input_features"].shape, (1, 1000, 128))
-        self.assertEqual(result["length"].dtype, torch.int64)
+        self.assertIsInstance(result["array"], np.ndarray)
+        self.assertEqual(result["array"].shape, (16000,))
 
 
 class TestTransformersASRBackendTo(unittest.TestCase):

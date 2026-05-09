@@ -228,7 +228,11 @@ def _config_from_entry(
     return_timestamps: bool | None = None,
 ) -> ASRConfig:
     requested_timestamps = entry.return_timestamps if return_timestamps is None else bool(return_timestamps)
-    if requested_timestamps and not (entry.supports_word_timestamps or entry.supports_segment_timestamps):
+    if (
+        requested_timestamps
+        and entry.backend not in {"transformers-asr", "hf-asr"}
+        and not (entry.supports_word_timestamps or entry.supports_segment_timestamps)
+    ):
         requested_timestamps = False
     return ASRConfig(
         backend=entry.backend,
@@ -249,15 +253,34 @@ def _initial_config_from_env() -> ASRConfig:
         MODEL_NAME, backend=ASR_BACKEND
     )
     if entry is None:
+        if ASR_BACKEND in {"transformers-asr", "hf-asr"}:
+            return ASRConfig(
+                backend=ASR_BACKEND,
+                model_key=MODEL_KEY,
+                model_name=MODEL_NAME,
+                hf_token=HF_TOKEN,
+                language=ASR_LANGUAGE,
+                task=ASR_TASK,
+                trust_remote_code=ASR_TRUST_REMOTE_CODE,
+                return_timestamps=ASR_RETURN_TIMESTAMPS,
+                chunk_length_s=ASR_CHUNK_LENGTH_S,
+                stride_length_s=ASR_STRIDE_LENGTH_S,
+            )
         raise RuntimeError(
             "ASR_MODEL must be one of the curated /v1/models entries "
             f"(got backend={ASR_BACKEND!r}, model={MODEL_KEY!r})"
         )
-    return _config_from_entry(
+    config = _config_from_entry(
         entry,
         language=ASR_LANGUAGE,
         return_timestamps=ASR_RETURN_TIMESTAMPS if ASR_RETURN_TIMESTAMPS else None,
     )
+    if config.backend in {"transformers-asr", "hf-asr"}:
+        config.trust_remote_code = ASR_TRUST_REMOTE_CODE
+        config.return_timestamps = ASR_RETURN_TIMESTAMPS
+        config.chunk_length_s = ASR_CHUNK_LENGTH_S
+        config.stride_length_s = ASR_STRIDE_LENGTH_S
+    return config
 
 
 def _disable_cuda_graphs(asr_model, verbose: bool = False) -> bool:
@@ -331,6 +354,20 @@ def _cleanup_cuda() -> None:
             pass
 
 
+def _load_audio_waveform(path: str) -> tuple[torch.Tensor, int]:
+    try:
+        return torchaudio.load(path)
+    except ImportError as exc:
+        if "TorchCodec" not in str(exc):
+            raise
+
+        import soundfile as sf
+
+        data, sr = sf.read(path, always_2d=True, dtype="float32")
+        waveform = torch.from_numpy(data.T).contiguous()
+        return waveform, int(sr)
+
+
 def _load_model_from_config(config: ASRConfig, *, warmup: bool = False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(
@@ -379,6 +416,10 @@ def _unload_models(*, unload_diarization: bool = False) -> None:
 def _effective_timestamps(config: ASRConfig, requested: str) -> str:
     if requested == "none":
         return "none"
+    if config.backend in {"transformers-asr", "hf-asr"}:
+        if not config.return_timestamps:
+            return "none"
+        return requested
     entry = _model_entry_for_config(config)
     if entry is None:
         return requested
@@ -400,6 +441,11 @@ def _validate_request_for_config(config: ASRConfig, *, diarization: bool, timest
         raise HTTPException(status_code=400, detail="diarization requires timestamps=word")
     if not diarization:
         return
+    if config.backend in {"transformers-asr", "hf-asr"} and not config.return_timestamps:
+        raise HTTPException(
+            status_code=400,
+            detail="diarization requires ASR_RETURN_TIMESTAMPS=1 for transformers-asr",
+        )
     entry = _model_entry_for_config(config)
     if entry is not None and not entry.supports_diarization:
         raise HTTPException(
@@ -593,6 +639,13 @@ def health():
         "ok": _ASR_MODEL is not None and _MODEL_STATE.get("state") == "ready",
         "model_state": _MODEL_STATE.get("state"),
         "asr_loaded": _ASR_MODEL is not None,
+        "asr_backend": ASR_BACKEND,
+        "asr_model_key": MODEL_KEY,
+        "asr_model_name": MODEL_NAME,
+        "asr_trust_remote_code": ASR_TRUST_REMOTE_CODE,
+        "asr_return_timestamps": ASR_RETURN_TIMESTAMPS,
+        "asr_chunk_length_s": ASR_CHUNK_LENGTH_S,
+        "asr_stride_length_s": ASR_STRIDE_LENGTH_S,
         "active_model": _public_config(_ACTIVE_CONFIG),
         "model_switch": dict(_MODEL_STATE),
         "available_models_count": len(MODEL_REGISTRY),
@@ -852,7 +905,7 @@ async def transcribe(
             print(f"[{trace_id}] ingest file={file.filename!r} bytes={len(file_bytes)} write_s={file_elapsed:.3f}")
 
         decode_start = time.perf_counter()
-        waveform, sr = torchaudio.load(str(tmp_path))
+        waveform, sr = _load_audio_waveform(str(tmp_path))
         if waveform.size(0) > 1:
             waveform = waveform.mean(dim=0, keepdim=True)
         if sr != 16000:
