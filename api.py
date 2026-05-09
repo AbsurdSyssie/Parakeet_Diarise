@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""ASR API: VAD chunking + configurable ASR + optional diarization."""
+"""ASR API: VAD chunking + runtime-selectable ASR + optional diarization."""
 
 from __future__ import annotations
 
+import gc
 import os
 import tempfile
+import threading
 import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 try:
     from dotenv import load_dotenv
@@ -16,7 +20,7 @@ except ImportError:
         return False
 import torchaudio
 import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 
 from api_response import build_response
 from asr_backend import ASRConfig, load_asr_backend, resolve_asr_model
@@ -32,28 +36,32 @@ from vad_chunk import run_vad_chunks_from_waveform, run_vad_chunks_in_memory_fro
 load_dotenv()
 
 app = FastAPI()
+_MODEL_LOCK = threading.RLock()
 _ASR_MODEL = None
 _DIAR_MODEL = None
+_ACTIVE_CONFIG: ASRConfig | None = None
 
-ASR_BACKEND = os.getenv("ASR_BACKEND", "nemo").strip().lower()
-if ASR_BACKEND == "nemo":
-    DEFAULT_MODEL_KEY = "parakeet-0.6b"
-elif ASR_BACKEND in {"whisper", "transformers-whisper"}:
-    DEFAULT_MODEL_KEY = "medical-whisper-large-v3"
-elif ASR_BACKEND in {"transformers-asr", "hf-asr"}:
-    DEFAULT_MODEL_KEY = "cohere-transcribe-03-2026"
-else:
-    DEFAULT_MODEL_KEY = "parakeet-0.6b"
-MODEL_KEY = os.getenv("ASR_MODEL", DEFAULT_MODEL_KEY).strip()
-MODEL_NAME = resolve_asr_model(ASR_BACKEND, MODEL_KEY)
-HF_TOKEN = (
-    os.getenv("HF_TOKEN")
-    or os.getenv("HUGGINGFACE_TOKEN")
-    or os.getenv("HUGGING_FACE_HUB_TOKEN")
-)
-ASR_LANGUAGE = os.getenv("ASR_LANGUAGE", "en").strip()
-ASR_TASK = os.getenv("ASR_TASK", "transcribe").strip()
-VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class ModelRegistryEntry:
+    id: str
+    backend: str
+    model_name: str
+    description: str
+    language: str = "en"
+    task: str = "transcribe"
+    trust_remote_code: bool = False
+    return_timestamps: bool = False
+    chunk_length_s: int | None = None
+    stride_length_s: int | tuple[int, int] | None = None
+    supports_word_timestamps: bool = True
+    supports_segment_timestamps: bool = True
+    supports_diarization: bool = True
+    selectable: bool = True
 
 
 def _get_env_int(name: str, default: str) -> int:
@@ -75,10 +83,181 @@ def _get_optional_env_int(name: str) -> int | None:
     return int(value)
 
 
+HF_TOKEN = (
+    os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_TOKEN")
+    or os.getenv("HUGGING_FACE_HUB_TOKEN")
+)
+ASR_BACKEND = os.getenv("ASR_BACKEND", "nemo").strip().lower()
+ASR_LANGUAGE = os.getenv("ASR_LANGUAGE", "en").strip()
+ASR_TASK = os.getenv("ASR_TASK", "transcribe").strip()
 ASR_TRUST_REMOTE_CODE = _get_env_bool("ASR_TRUST_REMOTE_CODE", "0")
 ASR_RETURN_TIMESTAMPS = _get_env_bool("ASR_RETURN_TIMESTAMPS", "0")
 ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
 ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
+VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+
+MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
+    "parakeet-0.6b": ModelRegistryEntry(
+        id="parakeet-0.6b",
+        backend="nemo",
+        model_name="nvidia/parakeet-tdt-0.6b-v3",
+        description="NVIDIA Parakeet TDT 0.6B v3 via NeMo",
+        supports_word_timestamps=True,
+        supports_segment_timestamps=True,
+        supports_diarization=True,
+    ),
+    "parakeet-1.1b": ModelRegistryEntry(
+        id="parakeet-1.1b",
+        backend="nemo",
+        model_name="nvidia/parakeet-tdt-1.1b",
+        description="NVIDIA Parakeet TDT 1.1B via NeMo",
+        supports_word_timestamps=True,
+        supports_segment_timestamps=True,
+        supports_diarization=True,
+    ),
+    "medical-whisper-large-v3": ModelRegistryEntry(
+        id="medical-whisper-large-v3",
+        backend="whisper",
+        model_name="Na0s/Medical-Whisper-Large-v3",
+        description="Medical Whisper Large v3 via Transformers pipeline",
+        supports_word_timestamps=True,
+        supports_segment_timestamps=True,
+        supports_diarization=True,
+    ),
+    "faster-whisper-large-v3": ModelRegistryEntry(
+        id="faster-whisper-large-v3",
+        backend="faster-whisper",
+        model_name="Systran/faster-whisper-large-v3",
+        description="SYSTRAN faster-whisper Large v3 via CTranslate2",
+        supports_word_timestamps=True,
+        supports_segment_timestamps=True,
+        supports_diarization=True,
+    ),
+    "cohere-transcribe-03-2026": ModelRegistryEntry(
+        id="cohere-transcribe-03-2026",
+        backend="transformers-asr",
+        model_name="CohereLabs/cohere-transcribe-03-2026",
+        description="Cohere Transcribe via Transformers custom ASR backend",
+        trust_remote_code=ASR_TRUST_REMOTE_CODE,
+        return_timestamps=False,
+        supports_word_timestamps=False,
+        supports_segment_timestamps=False,
+        supports_diarization=False,
+    ),
+}
+
+
+def _default_model_key_for_backend(backend: str) -> str:
+    if backend == "nemo":
+        return "parakeet-0.6b"
+    if backend in {"whisper", "transformers-whisper"}:
+        return "medical-whisper-large-v3"
+    if backend == "faster-whisper":
+        return "faster-whisper-large-v3"
+    if backend in {"transformers-asr", "hf-asr"}:
+        return "cohere-transcribe-03-2026"
+    return "parakeet-0.6b"
+
+
+MODEL_KEY = os.getenv("ASR_MODEL", _default_model_key_for_backend(ASR_BACKEND)).strip()
+MODEL_NAME = resolve_asr_model(ASR_BACKEND, MODEL_KEY)
+
+_MODEL_STATE: dict[str, Any] = {
+    "state": "starting",
+    "in_progress": False,
+    "started_at": None,
+    "completed_at": None,
+    "last_error": None,
+    "last_requested_model": MODEL_KEY,
+    "switch_count": 0,
+}
+
+
+def _find_model_entry(model_id: str, backend: str | None = None) -> ModelRegistryEntry | None:
+    normalized = (model_id or "").strip()
+    normalized_backend = (backend or "").strip().lower()
+    for entry in MODEL_REGISTRY.values():
+        if normalized not in {entry.id, entry.model_name}:
+            continue
+        if normalized_backend and normalized_backend != entry.backend:
+            continue
+        return entry
+    return None
+
+
+def _model_entry_for_config(config: ASRConfig | None) -> ModelRegistryEntry | None:
+    if config is None:
+        return None
+    return _find_model_entry(config.model_key, backend=config.backend) or _find_model_entry(
+        config.model_name, backend=config.backend
+    )
+
+
+def _public_model_entry(entry: ModelRegistryEntry) -> dict[str, Any]:
+    data = asdict(entry)
+    data["object"] = "model"
+    data["owned_by"] = entry.backend
+    return data
+
+
+def _public_config(config: ASRConfig | None) -> dict[str, Any] | None:
+    if config is None:
+        return None
+    entry = _model_entry_for_config(config)
+    return {
+        "backend": config.backend,
+        "model_key": config.model_key,
+        "model_name": config.model_name,
+        "language": config.language,
+        "task": config.task,
+        "trust_remote_code": config.trust_remote_code,
+        "return_timestamps": config.return_timestamps,
+        "chunk_length_s": config.chunk_length_s,
+        "stride_length_s": config.stride_length_s,
+        "supports_word_timestamps": bool(entry.supports_word_timestamps) if entry else None,
+        "supports_segment_timestamps": bool(entry.supports_segment_timestamps) if entry else None,
+        "supports_diarization": bool(entry.supports_diarization) if entry else None,
+    }
+
+
+def _config_from_entry(
+    entry: ModelRegistryEntry,
+    *,
+    language: str | None = None,
+    return_timestamps: bool | None = None,
+) -> ASRConfig:
+    requested_timestamps = entry.return_timestamps if return_timestamps is None else bool(return_timestamps)
+    if requested_timestamps and not (entry.supports_word_timestamps or entry.supports_segment_timestamps):
+        requested_timestamps = False
+    return ASRConfig(
+        backend=entry.backend,
+        model_key=entry.id,
+        model_name=entry.model_name,
+        hf_token=HF_TOKEN,
+        language=(language or entry.language or ASR_LANGUAGE),
+        task=entry.task or ASR_TASK,
+        trust_remote_code=entry.trust_remote_code,
+        return_timestamps=requested_timestamps,
+        chunk_length_s=entry.chunk_length_s,
+        stride_length_s=entry.stride_length_s,
+    )
+
+
+def _initial_config_from_env() -> ASRConfig:
+    entry = _find_model_entry(MODEL_KEY, backend=ASR_BACKEND) or _find_model_entry(
+        MODEL_NAME, backend=ASR_BACKEND
+    )
+    if entry is None:
+        raise RuntimeError(
+            "ASR_MODEL must be one of the curated /v1/models entries "
+            f"(got backend={ASR_BACKEND!r}, model={MODEL_KEY!r})"
+        )
+    return _config_from_entry(
+        entry,
+        language=ASR_LANGUAGE,
+        return_timestamps=ASR_RETURN_TIMESTAMPS if ASR_RETURN_TIMESTAMPS else None,
+    )
 
 
 def _disable_cuda_graphs(asr_model, verbose: bool = False) -> bool:
@@ -140,6 +319,207 @@ def cuda_mem():
         "reserved_gb": round(torch.cuda.memory_reserved() / 1024**3, 3),
         "max_allocated_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 3),
     }
+
+
+def _cleanup_cuda() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.reset_peak_memory_stats()
+        except Exception:
+            pass
+
+
+def _load_model_from_config(config: ASRConfig, *, warmup: bool = False):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(
+        "Loading ASR model: "
+        f"backend={config.backend!r}, key={config.model_key!r}, model_name={config.model_name!r}"
+    )
+    asr_model = load_asr_backend(config)
+    asr_model = asr_model.to(device)
+
+    if config.backend == "nemo":
+        _patch_transcribe_dataloader_no_lhotse(asr_model)
+        if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
+            if _disable_cuda_graphs(asr_model, verbose=True):
+                print("  CUDA graphs disabled for decoding")
+
+    if warmup:
+        dummy = torch.zeros(16000, dtype=torch.float32)
+        asr_model.transcribe(
+            [dummy],
+            timestamps=False,
+            verbose=False,
+            batch_size=1,
+            num_workers=0,
+            return_hypotheses=True,
+        )
+
+    return asr_model
+
+
+def _unload_models(*, unload_diarization: bool = False) -> None:
+    global _ASR_MODEL, _DIAR_MODEL
+    old_asr = _ASR_MODEL
+    _ASR_MODEL = None
+    if old_asr is not None:
+        del old_asr
+
+    if unload_diarization:
+        old_diar = _DIAR_MODEL
+        _DIAR_MODEL = None
+        if old_diar is not None:
+            del old_diar
+
+    _cleanup_cuda()
+
+
+def _effective_timestamps(config: ASRConfig, requested: str) -> str:
+    if requested == "none":
+        return "none"
+    entry = _model_entry_for_config(config)
+    if entry is None:
+        return requested
+    if requested == "word":
+        if entry.supports_word_timestamps and config.return_timestamps:
+            return "word"
+        if entry.supports_segment_timestamps and config.return_timestamps:
+            return "segment"
+        return "none"
+    if requested == "segment":
+        if entry.supports_segment_timestamps and config.return_timestamps:
+            return "segment"
+        return "none"
+    return requested
+
+
+def _validate_request_for_config(config: ASRConfig, *, diarization: bool, timestamps: str) -> None:
+    if diarization and timestamps != "word":
+        raise HTTPException(status_code=400, detail="diarization requires timestamps=word")
+    if not diarization:
+        return
+    entry = _model_entry_for_config(config)
+    if entry is not None and not entry.supports_diarization:
+        raise HTTPException(
+            status_code=400,
+            detail=f"diarization is not supported by active model {entry.id!r}",
+        )
+    if _effective_timestamps(config, timestamps) != "word":
+        raise HTTPException(
+            status_code=400,
+            detail="diarization requires an active model with word timestamps enabled",
+        )
+
+
+def _active_model_or_503() -> tuple[Any, ASRConfig]:
+    if _ASR_MODEL is None or _ACTIVE_CONFIG is None:
+        raise HTTPException(status_code=503, detail="ASR model is not loaded")
+    return _ASR_MODEL, _ACTIVE_CONFIG
+
+
+def _switch_model(config: ASRConfig) -> dict[str, Any]:
+    global _ASR_MODEL, _ACTIVE_CONFIG
+    with _MODEL_LOCK:
+        previous_config = _ACTIVE_CONFIG
+        previous_public = _public_config(previous_config)
+        if previous_config == config and _ASR_MODEL is not None:
+            return {
+                "ok": True,
+                "changed": False,
+                "active_model": _public_config(_ACTIVE_CONFIG),
+                "cuda_mem": cuda_mem(),
+            }
+
+        _MODEL_STATE.update(
+            {
+                "state": "loading",
+                "in_progress": True,
+                "started_at": _utcnow(),
+                "completed_at": None,
+                "last_error": None,
+                "last_requested_model": config.model_key,
+            }
+        )
+
+        _unload_models(unload_diarization=True)
+        load_started = time.perf_counter()
+        try:
+            new_model = _load_model_from_config(config, warmup=False)
+            load_s = time.perf_counter() - load_started
+            _ASR_MODEL = new_model
+            _ACTIVE_CONFIG = config
+            _MODEL_STATE.update(
+                {
+                    "state": "ready",
+                    "in_progress": False,
+                    "completed_at": _utcnow(),
+                    "last_error": None,
+                    "switch_count": int(_MODEL_STATE.get("switch_count", 0)) + 1,
+                }
+            )
+            return {
+                "ok": True,
+                "changed": True,
+                "previous_model": previous_public,
+                "active_model": _public_config(_ACTIVE_CONFIG),
+                "load_s": round(load_s, 3),
+                "cuda_mem": cuda_mem(),
+            }
+        except Exception as exc:
+            new_error = str(exc)
+            _MODEL_STATE["last_error"] = new_error
+            if previous_config is not None:
+                try:
+                    restored_model = _load_model_from_config(previous_config, warmup=False)
+                    _ASR_MODEL = restored_model
+                    _ACTIVE_CONFIG = previous_config
+                    _MODEL_STATE.update(
+                        {
+                            "state": "ready",
+                            "in_progress": False,
+                            "completed_at": _utcnow(),
+                            "last_error": new_error,
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "message": "requested model failed to load; previous model was restored",
+                            "error": new_error,
+                            "active_model": _public_config(_ACTIVE_CONFIG),
+                        },
+                    ) from exc
+                except HTTPException:
+                    raise
+                except Exception as restore_exc:
+                    _MODEL_STATE.update(
+                        {
+                            "state": "error",
+                            "in_progress": False,
+                            "completed_at": _utcnow(),
+                            "last_error": f"{new_error}; restore failed: {restore_exc}",
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "message": "requested model failed to load and previous model restore failed",
+                            "error": new_error,
+                            "restore_error": str(restore_exc),
+                        },
+                    ) from exc
+
+            _MODEL_STATE.update(
+                {
+                    "state": "error",
+                    "in_progress": False,
+                    "completed_at": _utcnow(),
+                    "last_error": new_error,
+                }
+            )
+            raise HTTPException(status_code=500, detail=new_error) from exc
 
 
 def _chunk_debug_from_in_memory(chunks: list[dict], duration: float, pad_s: float) -> list[dict]:
@@ -210,67 +590,101 @@ def _log_chunk_durations(chunks: list[dict], duration: float, pad_s: float, trac
 @app.get("/health")
 def health():
     return {
-        "ok": True,
+        "ok": _ASR_MODEL is not None and _MODEL_STATE.get("state") == "ready",
+        "model_state": _MODEL_STATE.get("state"),
         "asr_loaded": _ASR_MODEL is not None,
-        "asr_backend": ASR_BACKEND,
-        "asr_model_key": MODEL_KEY,
-        "asr_model_name": MODEL_NAME,
-        "asr_language": ASR_LANGUAGE,
-        "asr_task": ASR_TASK,
-        "asr_trust_remote_code": ASR_TRUST_REMOTE_CODE,
-        "asr_return_timestamps": ASR_RETURN_TIMESTAMPS,
-        "asr_chunk_length_s": ASR_CHUNK_LENGTH_S,
-        "asr_stride_length_s": ASR_STRIDE_LENGTH_S,
+        "active_model": _public_config(_ACTIVE_CONFIG),
+        "model_switch": dict(_MODEL_STATE),
+        "available_models_count": len(MODEL_REGISTRY),
         "hf_token_configured": bool(HF_TOKEN),
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
 
 
+@app.get("/v1/models")
+def list_models():
+    return {
+        "object": "list",
+        "data": [_public_model_entry(entry) for entry in MODEL_REGISTRY.values()],
+    }
+
+
+@app.get("/v1/models/current")
+def get_current_model():
+    return {
+        "object": "model.current",
+        "active_model": _public_config(_ACTIVE_CONFIG),
+        "asr_loaded": _ASR_MODEL is not None,
+        "model_state": dict(_MODEL_STATE),
+        "cuda_mem": cuda_mem(),
+    }
+
+
+@app.post("/v1/models/current")
+def set_current_model(payload: dict[str, Any] = Body(...)):
+    model_id = str(payload.get("model") or payload.get("model_id") or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="Request body must include 'model' or 'model_id'")
+
+    entry = _find_model_entry(model_id)
+    if entry is None or not entry.selectable:
+        raise HTTPException(status_code=404, detail=f"Unknown or unselectable model: {model_id!r}")
+
+    language = payload.get("language")
+    if language is not None:
+        language = str(language).strip() or None
+
+    return_timestamps = payload.get("return_timestamps")
+    if return_timestamps is None and "timestamps" in payload:
+        timestamps_value = payload.get("timestamps")
+        if isinstance(timestamps_value, str):
+            return_timestamps = timestamps_value.strip().lower() not in {"0", "false", "none", "off", "no"}
+        else:
+            return_timestamps = bool(timestamps_value)
+
+    config = _config_from_entry(entry, language=language, return_timestamps=return_timestamps)
+    return _switch_model(config)
+
+
 @app.on_event("startup")
 def _startup_load_model() -> None:
-    global _ASR_MODEL
-    if _ASR_MODEL is not None:
-        return
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    config = ASRConfig(
-        backend=ASR_BACKEND,
-        model_key=MODEL_KEY,
-        model_name=MODEL_NAME,
-        hf_token=HF_TOKEN,
-        language=ASR_LANGUAGE,
-        task=ASR_TASK,
-        trust_remote_code=ASR_TRUST_REMOTE_CODE,
-        return_timestamps=ASR_RETURN_TIMESTAMPS,
-        chunk_length_s=ASR_CHUNK_LENGTH_S,
-        stride_length_s=ASR_STRIDE_LENGTH_S,
-    )
-    print(
-        "Loading ASR model: "
-        f"backend={ASR_BACKEND!r}, key={MODEL_KEY!r}, model_name={MODEL_NAME!r}"
-    )
-    asr_model = load_asr_backend(config)
-    asr_model = asr_model.to(device)
-
-    if ASR_BACKEND == "nemo":
-        _patch_transcribe_dataloader_no_lhotse(asr_model)
-        if _get_env_bool("DISABLE_CUDA_GRAPHS", "0"):
-            if _disable_cuda_graphs(asr_model, verbose=True):
-                print("  CUDA graphs disabled for decoding")
-
-    # Warmup to amortize first-request overhead.
-    dummy = torch.zeros(16000, dtype=torch.float32)
-    asr_model.transcribe(
-        [dummy],
-        timestamps=False,
-        verbose=False,
-        batch_size=1,
-        num_workers=0,
-        return_hypotheses=True,
-    )
-
-    _ASR_MODEL = asr_model
+    global _ASR_MODEL, _ACTIVE_CONFIG
+    with _MODEL_LOCK:
+        if _ASR_MODEL is not None:
+            return
+        config = _initial_config_from_env()
+        _MODEL_STATE.update(
+            {
+                "state": "loading",
+                "in_progress": True,
+                "started_at": _utcnow(),
+                "completed_at": None,
+                "last_error": None,
+                "last_requested_model": config.model_key,
+            }
+        )
+        try:
+            _ASR_MODEL = _load_model_from_config(config, warmup=True)
+            _ACTIVE_CONFIG = config
+            _MODEL_STATE.update(
+                {
+                    "state": "ready",
+                    "in_progress": False,
+                    "completed_at": _utcnow(),
+                    "last_error": None,
+                }
+            )
+        except Exception as exc:
+            _MODEL_STATE.update(
+                {
+                    "state": "error",
+                    "in_progress": False,
+                    "completed_at": _utcnow(),
+                    "last_error": str(exc),
+                }
+            )
+            raise
 
 
 def _get_diar_model():
@@ -388,7 +802,7 @@ async def transcribe(
     response_format: Literal["verbose_json"] = Form("verbose_json", description="Only supported response format."),
     diarization: bool = Form(False, description="Enable Sortformer diarization. Requires timestamps=word."),
     timestamps: Literal["word", "segment", "none"] = Form("word", description="word, segment, or none. word required for diarization."),
-    language: str = Form("en", description="Currently only 'en' is supported."),
+    language: str = Form("en", description="Currently only response metadata; active model language is selected at model load."),
     chunk_mode: Literal["memory", "file"] = Form("memory", description="memory (default) or file (writes chunk WAVs to disk)."),
     chunk_only: bool = Form(False, description="Return VAD chunks only; skips ASR."),
     trace_audio: bool = Form(False, description="Emit per-request trace logs for ingest/decode/VAD."),
@@ -418,22 +832,12 @@ async def transcribe(
         raise HTTPException(status_code=400, detail="timestamps must be 'word', 'segment', or 'none'")
     if chunk_mode not in {"memory", "file"}:
         raise HTTPException(status_code=400, detail="chunk_mode must be 'memory' or 'file'")
-    if diarization and timestamps != "word":
-        raise HTTPException(status_code=400, detail="diarization requires timestamps=word")
     if force_vad not in {"off", "on"}:
         raise HTTPException(status_code=400, detail="force_vad must be 'off' or 'on'")
 
-    effective_timestamps = timestamps
-
-    if ASR_BACKEND in {"transformers-asr", "hf-asr"} and timestamps != "none":
-        if not ASR_RETURN_TIMESTAMPS:
-            effective_timestamps = "none"
-
-    if diarization and ASR_BACKEND in {"transformers-asr", "hf-asr"} and not ASR_RETURN_TIMESTAMPS:
-        raise HTTPException(
-            status_code=400,
-            detail="diarization requires ASR_RETURN_TIMESTAMPS=1 for transformers-asr",
-        )
+    with _MODEL_LOCK:
+        _, initial_config = _active_model_or_503()
+        _validate_request_for_config(initial_config, diarization=diarization, timestamps=timestamps)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         start_req = time.perf_counter()
@@ -561,13 +965,17 @@ async def transcribe(
                 }
 
             start_asr = time.perf_counter()
-            result = transcribe_chunks_in_memory_mode(
-                asr_model=_ASR_MODEL,
-                chunks=chunks,
-                batch_size=4,
-                timestamps=effective_timestamps,
-                pad_left_s=pad_s,
-            )
+            with _MODEL_LOCK:
+                asr_model, active_config = _active_model_or_503()
+                _validate_request_for_config(active_config, diarization=diarization, timestamps=timestamps)
+                effective_timestamps = _effective_timestamps(active_config, timestamps)
+                result = transcribe_chunks_in_memory_mode(
+                    asr_model=asr_model,
+                    chunks=chunks,
+                    batch_size=4,
+                    timestamps=effective_timestamps,
+                    pad_left_s=pad_s,
+                )
         else:
             chunk_dir = Path(tmpdir) / "chunks"
             vad_start = time.perf_counter()
@@ -613,14 +1021,18 @@ async def transcribe(
                 }
 
             start_asr = time.perf_counter()
-            result = transcribe_chunks_with_model_mode(
-                asr_model=_ASR_MODEL,
-                chunk_dir=chunk_dir,
-                pad_left_s=pad_s,
-                pad_right_s=pad_s,
-                batch_size=4,
-                timestamps=effective_timestamps,
-            )
+            with _MODEL_LOCK:
+                asr_model, active_config = _active_model_or_503()
+                _validate_request_for_config(active_config, diarization=diarization, timestamps=timestamps)
+                effective_timestamps = _effective_timestamps(active_config, timestamps)
+                result = transcribe_chunks_with_model_mode(
+                    asr_model=asr_model,
+                    chunk_dir=chunk_dir,
+                    pad_left_s=pad_s,
+                    pad_right_s=pad_s,
+                    batch_size=4,
+                    timestamps=effective_timestamps,
+                )
 
         elapsed = time.perf_counter() - start_asr
         print(
