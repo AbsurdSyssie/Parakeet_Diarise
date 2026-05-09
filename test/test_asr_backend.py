@@ -158,6 +158,42 @@ class TestTransformersASRBackendPrepareInput(unittest.TestCase):
         self.assertEqual(result.shape, (16000,))
 
 
+class TestTransformersASRBackendProcessorInputs(unittest.TestCase):
+    def setUp(self):
+        self.backend = TransformersASRBackend.__new__(TransformersASRBackend)
+        self.backend.device = "cpu"
+        self.backend.torch_dtype = torch.float16
+        self.backend.model = MagicMock()
+        self.backend.model.device = torch.device("cpu")
+        self.backend.model.dtype = torch.float16
+        self.backend.processor = MagicMock()
+        self.backend.processor.feature_extractor = MagicMock()
+        self.backend.processor.feature_extractor.feature_size = 128
+
+    def test_prepare_processor_inputs_transposes_cohere_features(self):
+        proc_inputs = {
+            "input_features": torch.randn(1, 128, 1000, dtype=torch.float32),
+            "length": torch.tensor([1000], dtype=torch.int64),
+        }
+
+        result = self.backend._prepare_processor_inputs(proc_inputs)
+
+        self.assertEqual(result["input_features"].shape, (1, 1000, 128))
+        self.assertEqual(result["input_features"].dtype, torch.float16)
+        self.assertEqual(result["length"].dtype, torch.int64)
+
+    def test_prepare_processor_inputs_keeps_already_transposed_features(self):
+        proc_inputs = {
+            "input_features": torch.randn(1, 1000, 128, dtype=torch.float32),
+            "length": torch.tensor([1000], dtype=torch.int64),
+        }
+
+        result = self.backend._prepare_processor_inputs(proc_inputs)
+
+        self.assertEqual(result["input_features"].shape, (1, 1000, 128))
+        self.assertEqual(result["length"].dtype, torch.int64)
+
+
 class TestTransformersASRBackendTo(unittest.TestCase):
     def setUp(self):
         self.backend = TransformersASRBackend.__new__(TransformersASRBackend)
