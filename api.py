@@ -9,7 +9,11 @@ import time
 from pathlib import Path
 from typing import Literal, Optional
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        return False
 import torchaudio
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -32,7 +36,14 @@ _ASR_MODEL = None
 _DIAR_MODEL = None
 
 ASR_BACKEND = os.getenv("ASR_BACKEND", "nemo").strip().lower()
-DEFAULT_MODEL_KEY = "parakeet-0.6b" if ASR_BACKEND == "nemo" else "medical-whisper-large-v3"
+if ASR_BACKEND == "nemo":
+    DEFAULT_MODEL_KEY = "parakeet-0.6b"
+elif ASR_BACKEND in {"whisper", "transformers-whisper"}:
+    DEFAULT_MODEL_KEY = "medical-whisper-large-v3"
+elif ASR_BACKEND in {"transformers-asr", "hf-asr"}:
+    DEFAULT_MODEL_KEY = "cohere-transcribe-03-2026"
+else:
+    DEFAULT_MODEL_KEY = "parakeet-0.6b"
 MODEL_KEY = os.getenv("ASR_MODEL", DEFAULT_MODEL_KEY).strip()
 MODEL_NAME = resolve_asr_model(ASR_BACKEND, MODEL_KEY)
 HF_TOKEN = (
@@ -55,6 +66,19 @@ def _get_env_float(name: str, default: str) -> float:
 
 def _get_env_bool(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_optional_env_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
+
+
+ASR_TRUST_REMOTE_CODE = _get_env_bool("ASR_TRUST_REMOTE_CODE", "0")
+ASR_RETURN_TIMESTAMPS = _get_env_bool("ASR_RETURN_TIMESTAMPS", "0")
+ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
+ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
 
 
 def _disable_cuda_graphs(asr_model, verbose: bool = False) -> bool:
@@ -193,6 +217,10 @@ def health():
         "asr_model_name": MODEL_NAME,
         "asr_language": ASR_LANGUAGE,
         "asr_task": ASR_TASK,
+        "asr_trust_remote_code": ASR_TRUST_REMOTE_CODE,
+        "asr_return_timestamps": ASR_RETURN_TIMESTAMPS,
+        "asr_chunk_length_s": ASR_CHUNK_LENGTH_S,
+        "asr_stride_length_s": ASR_STRIDE_LENGTH_S,
         "hf_token_configured": bool(HF_TOKEN),
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
@@ -213,6 +241,10 @@ def _startup_load_model() -> None:
         hf_token=HF_TOKEN,
         language=ASR_LANGUAGE,
         task=ASR_TASK,
+        trust_remote_code=ASR_TRUST_REMOTE_CODE,
+        return_timestamps=ASR_RETURN_TIMESTAMPS,
+        chunk_length_s=ASR_CHUNK_LENGTH_S,
+        stride_length_s=ASR_STRIDE_LENGTH_S,
     )
     print(
         "Loading ASR model: "
@@ -391,6 +423,18 @@ async def transcribe(
     if force_vad not in {"off", "on"}:
         raise HTTPException(status_code=400, detail="force_vad must be 'off' or 'on'")
 
+    effective_timestamps = timestamps
+
+    if ASR_BACKEND in {"transformers-asr", "hf-asr"} and timestamps != "none":
+        if not ASR_RETURN_TIMESTAMPS:
+            effective_timestamps = "none"
+
+    if diarization and ASR_BACKEND in {"transformers-asr", "hf-asr"} and not ASR_RETURN_TIMESTAMPS:
+        raise HTTPException(
+            status_code=400,
+            detail="diarization requires ASR_RETURN_TIMESTAMPS=1 for transformers-asr",
+        )
+
     with tempfile.TemporaryDirectory() as tmpdir:
         start_req = time.perf_counter()
         trace_id = f"trace-{int(start_req * 1000)}" if trace_audio else None
@@ -521,7 +565,7 @@ async def transcribe(
                 asr_model=_ASR_MODEL,
                 chunks=chunks,
                 batch_size=4,
-                timestamps=timestamps,
+                timestamps=effective_timestamps,
                 pad_left_s=pad_s,
             )
         else:
@@ -575,7 +619,7 @@ async def transcribe(
                 pad_left_s=pad_s,
                 pad_right_s=pad_s,
                 batch_size=4,
-                timestamps=timestamps,
+                timestamps=effective_timestamps,
             )
 
         elapsed = time.perf_counter() - start_asr
@@ -586,7 +630,7 @@ async def transcribe(
         print(f"cuda mem after asr: {cuda_mem()}")
 
         text_override = result["text"]
-        words = result["words"] if timestamps == "word" else []
+        words = result["words"] if effective_timestamps == "word" else []
 
         if diarization:
             start_diar = time.perf_counter()
@@ -598,12 +642,12 @@ async def transcribe(
             words_with_speaker = [{**w, "speaker": w.get("speaker") or "UNKNOWN"} for w in words]
 
         start_merge = time.perf_counter()
-        if timestamps == "word":
+        if effective_timestamps == "word":
             segments = group_words_into_segments(words_with_speaker)
             for idx, seg in enumerate(segments):
                 seg.setdefault("id", idx)
             text_override = None
-        elif timestamps == "segment":
+        elif effective_timestamps == "segment":
             segments = result["segments"]
             for idx, seg in enumerate(segments):
                 seg.setdefault("id", idx)

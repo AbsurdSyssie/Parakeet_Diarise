@@ -16,3 +16,4 @@ Output/.cache
 **/*.mp3
 **/*.flac
 **/*.nemo
+.codex

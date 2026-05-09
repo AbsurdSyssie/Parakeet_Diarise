@@ -21,6 +21,10 @@ WHISPER_MODEL_ALIASES = {
     "whisper-medical-large-v3": "Na0s/Medical-Whisper-Large-v3",
 }
 
+TRANSFORMERS_ASR_MODEL_ALIASES = {
+    "cohere-transcribe-03-2026": "CohereLabs/cohere-transcribe-03-2026",
+}
+
 
 @dataclass
 class ASRConfig:
@@ -30,6 +34,10 @@ class ASRConfig:
     hf_token: str | None = None
     language: str = "en"
     task: str = "transcribe"
+    trust_remote_code: bool = False
+    return_timestamps: bool = False
+    chunk_length_s: int | None = None
+    stride_length_s: int | tuple[int, int] | None = None
 
 
 @dataclass
@@ -48,13 +56,18 @@ def resolve_asr_model(backend: str, model_key: str) -> str:
             return NEMO_MODEL_ALIASES["parakeet-0.6b"]
         return NEMO_MODEL_ALIASES.get(normalized_key, normalized_key)
 
-    if normalized_backend in {"whisper", "transformers", "transformers-whisper"}:
+    if normalized_backend in {"whisper", "transformers-whisper"}:
         if not normalized_key:
             return WHISPER_MODEL_ALIASES["medical-whisper-large-v3"]
         return WHISPER_MODEL_ALIASES.get(normalized_key, normalized_key)
 
+    if normalized_backend in {"transformers-asr", "hf-asr"}:
+        if not normalized_key:
+            return TRANSFORMERS_ASR_MODEL_ALIASES["cohere-transcribe-03-2026"]
+        return TRANSFORMERS_ASR_MODEL_ALIASES.get(normalized_key, normalized_key)
+
     raise ValueError(
-        "ASR_BACKEND must be 'nemo' or 'whisper' "
+        "ASR_BACKEND must be 'nemo', 'whisper', or 'transformers-asr' "
         f"(got {backend!r})"
     )
 
@@ -180,6 +193,103 @@ class WhisperASRBackend:
         return SimpleHypothesis(text=text, timestamp={"word": words, "segment": segments})
 
 
+class TransformersASRBackend:
+    """Generic Hugging Face Transformers ASR adapter (Cohere, etc.)."""
+
+    def __init__(
+        self,
+        model_name: str,
+        hf_token: str | None = None,
+        trust_remote_code: bool = False,
+        return_timestamps: bool = False,
+        chunk_length_s: int | None = None,
+        stride_length_s: int | tuple[int, int] | None = None,
+        language: str = "en",
+    ) -> None:
+        from transformers import AutoProcessor, CohereAsrForConditionalGeneration
+
+        self.model_name = model_name
+        self.return_timestamps = return_timestamps
+        self.chunk_length_s = chunk_length_s
+        self.stride_length_s = stride_length_s
+        self.language = language
+        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+        model_kwargs: dict[str, Any] = {
+            "trust_remote_code": trust_remote_code,
+            "torch_dtype": self.torch_dtype,
+        }
+        if hf_token:
+            model_kwargs["token"] = hf_token
+
+        self.processor = AutoProcessor.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code, token=hf_token,
+        )
+        self.model = CohereAsrForConditionalGeneration.from_pretrained(
+            model_name, **model_kwargs,
+        ).to(self.device)
+
+        # CohereAsrForConditionalGeneration.forward doesn't declare 'length' but
+        # its custom generate() and prepare_inputs_for_generation consume it.
+        # _validate_model_kwargs in transformers 5.x rejects undeclared kwargs.
+        self.model._validate_model_kwargs = lambda kwargs, model_kwargs=None: None
+
+    def to(self, device: str | torch.device):
+        return self
+
+    def transcribe(
+        self,
+        inputs: Iterable[Any],
+        timestamps: bool = False,
+        verbose: bool = False,
+        batch_size: int = 1,
+        num_workers: int = 0,
+        return_hypotheses: bool = True,
+        **_: Any,
+    ) -> list[SimpleHypothesis] | list[str]:
+        prepared = [self._prepare_input(item) for item in inputs]
+
+        hypotheses: list[SimpleHypothesis] = []
+        for audio in prepared:
+            proc_inputs = self.processor(
+                audio, sampling_rate=16000, return_tensors="pt", language=self.language,
+            )
+            proc_inputs = {k: v.to(self.device, dtype=self.model.dtype) for k, v in proc_inputs.items()}
+
+            generate_kwargs = dict(proc_inputs)
+            generate_kwargs["max_new_tokens"] = 256
+
+            with torch.no_grad():
+                output_ids = self.model.generate(**generate_kwargs)
+
+            text = self.processor.decode(output_ids, skip_special_tokens=True)
+            if isinstance(text, list):
+                text = " ".join(text)
+            hypotheses.append(SimpleHypothesis(text=str(text).strip(), timestamp={"word": [], "segment": []}))
+
+        if return_hypotheses:
+            return hypotheses
+        return [hyp.text for hyp in hypotheses]
+
+    def _prepare_input(self, item: Any) -> Any:
+        if isinstance(item, (str, Path)):
+            from transformers.audio_utils import load_audio
+            return load_audio(str(item), sampling_rate=16000)
+
+        if isinstance(item, torch.Tensor):
+            tensor = item.detach().cpu()
+            if tensor.dim() == 2 and tensor.size(0) == 1:
+                tensor = tensor.squeeze(0)
+            return tensor.float().numpy()
+
+        return item
+
+    def _to_hypothesis(self, output: dict[str, Any], timestamps: bool) -> SimpleHypothesis:
+        text = str(output.get("text") or "").strip()
+        return SimpleHypothesis(text=text, timestamp={"word": [], "segment": []})
+
+
 def load_nemo_asr_model(config: ASRConfig):
     kwargs = {"model_name": config.model_name}
     if config.hf_token:
@@ -196,14 +306,24 @@ def load_asr_backend(config: ASRConfig):
     backend = config.backend.strip().lower()
     if backend == "nemo":
         return load_nemo_asr_model(config)
-    if backend in {"whisper", "transformers", "transformers-whisper"}:
+    if backend in {"whisper", "transformers-whisper"}:
         return WhisperASRBackend(
             model_name=config.model_name,
             hf_token=config.hf_token,
             language=config.language,
             task=config.task,
         )
+    if backend in {"transformers-asr", "hf-asr"}:
+        return TransformersASRBackend(
+            model_name=config.model_name,
+            hf_token=config.hf_token,
+            trust_remote_code=config.trust_remote_code,
+            return_timestamps=config.return_timestamps,
+            chunk_length_s=config.chunk_length_s,
+            stride_length_s=config.stride_length_s,
+            language=config.language,
+        )
     raise ValueError(
-        "ASR_BACKEND must be 'nemo' or 'whisper' "
+        "ASR_BACKEND must be 'nemo', 'whisper', or 'transformers-asr' "
         f"(got {config.backend!r})"
     )
