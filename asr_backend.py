@@ -21,6 +21,10 @@ WHISPER_MODEL_ALIASES = {
     "whisper-medical-large-v3": "Na0s/Medical-Whisper-Large-v3",
 }
 
+FASTER_WHISPER_MODEL_ALIASES = {
+    "faster-whisper-large-v3": "Systran/faster-whisper-large-v3",
+}
+
 TRANSFORMERS_ASR_MODEL_ALIASES = {
     "cohere-transcribe-03-2026": "CohereLabs/cohere-transcribe-03-2026",
 }
@@ -61,13 +65,18 @@ def resolve_asr_model(backend: str, model_key: str) -> str:
             return WHISPER_MODEL_ALIASES["medical-whisper-large-v3"]
         return WHISPER_MODEL_ALIASES.get(normalized_key, normalized_key)
 
+    if normalized_backend == "faster-whisper":
+        if not normalized_key:
+            return FASTER_WHISPER_MODEL_ALIASES["faster-whisper-large-v3"]
+        return FASTER_WHISPER_MODEL_ALIASES.get(normalized_key, normalized_key)
+
     if normalized_backend in {"transformers-asr", "hf-asr"}:
         if not normalized_key:
             return TRANSFORMERS_ASR_MODEL_ALIASES["cohere-transcribe-03-2026"]
         return TRANSFORMERS_ASR_MODEL_ALIASES.get(normalized_key, normalized_key)
 
     raise ValueError(
-        "ASR_BACKEND must be 'nemo', 'whisper', or 'transformers-asr' "
+        "ASR_BACKEND must be 'nemo', 'whisper', 'faster-whisper', or 'transformers-asr' "
         f"(got {backend!r})"
     )
 
@@ -191,6 +200,108 @@ class WhisperASRBackend:
             segments.append({"segment": chunk_text, "start": start_f, "end": end_f})
 
         return SimpleHypothesis(text=text, timestamp={"word": words, "segment": segments})
+
+
+class FasterWhisperASRBackend:
+    """faster-whisper / CTranslate2 adapter with a NeMo-like transcribe interface."""
+
+    def __init__(
+        self,
+        model_name: str,
+        hf_token: str | None = None,
+        language: str = "en",
+        task: str = "transcribe",
+    ) -> None:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "faster-whisper backend requires the 'faster-whisper' package. "
+                "Install it before selecting Systran/faster-whisper models."
+            ) from exc
+
+        self.model_name = model_name
+        self.language = language or None
+        self.task = task
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.compute_type = "float16" if torch.cuda.is_available() else "int8"
+
+        model_kwargs: dict[str, Any] = {
+            "device": self.device,
+            "compute_type": self.compute_type,
+        }
+        if hf_token:
+            model_kwargs["token"] = hf_token
+
+        self.model = WhisperModel(model_name, **model_kwargs)
+
+    def to(self, device: str | torch.device):
+        # CTranslate2 device placement is configured at load time.
+        return self
+
+    def transcribe(
+        self,
+        inputs: Iterable[Any],
+        timestamps: bool = False,
+        verbose: bool = False,
+        batch_size: int = 1,
+        num_workers: int = 0,
+        return_hypotheses: bool = True,
+        **_: Any,
+    ) -> list[SimpleHypothesis] | list[str]:
+        hypotheses: list[SimpleHypothesis] = []
+        for item in inputs:
+            audio = self._prepare_input(item)
+            segments_iter, _info = self.model.transcribe(
+                audio,
+                language=self.language,
+                task=self.task,
+                word_timestamps=timestamps,
+            )
+            segments = list(segments_iter)
+            text = " ".join((segment.text or "").strip() for segment in segments).strip()
+
+            words: list[dict[str, Any]] = []
+            segment_items: list[dict[str, Any]] = []
+            if timestamps:
+                for segment in segments:
+                    segment_text = (segment.text or "").strip()
+                    start = float(segment.start or 0.0)
+                    end = float(segment.end or start)
+                    if segment_text and end > start:
+                        segment_items.append({"segment": segment_text, "start": start, "end": end})
+                    for word in getattr(segment, "words", None) or []:
+                        word_text = (word.word or "").strip()
+                        if not word_text:
+                            continue
+                        word_start = float(word.start or 0.0)
+                        word_end = float(word.end or word_start)
+                        if word_end <= word_start:
+                            word_end = word_start + 0.01
+                        words.append({"word": word_text, "start": word_start, "end": word_end})
+
+            hypotheses.append(
+                SimpleHypothesis(
+                    text=text,
+                    timestamp={"word": words, "segment": segment_items},
+                )
+            )
+
+        if return_hypotheses:
+            return hypotheses
+        return [hyp.text for hyp in hypotheses]
+
+    def _prepare_input(self, item: Any) -> Any:
+        if isinstance(item, (str, Path)):
+            return str(item)
+
+        if isinstance(item, torch.Tensor):
+            tensor = item.detach().cpu()
+            if tensor.dim() == 2 and tensor.size(0) == 1:
+                tensor = tensor.squeeze(0)
+            return tensor.float().numpy()
+
+        return item
 
 
 class TransformersASRBackend:
@@ -356,6 +467,13 @@ def load_asr_backend(config: ASRConfig):
             language=config.language,
             task=config.task,
         )
+    if backend == "faster-whisper":
+        return FasterWhisperASRBackend(
+            model_name=config.model_name,
+            hf_token=config.hf_token,
+            language=config.language,
+            task=config.task,
+        )
     if backend in {"transformers-asr", "hf-asr"}:
         return TransformersASRBackend(
             model_name=config.model_name,
@@ -367,6 +485,6 @@ def load_asr_backend(config: ASRConfig):
             language=config.language,
         )
     raise ValueError(
-        "ASR_BACKEND must be 'nemo', 'whisper', or 'transformers-asr' "
+        "ASR_BACKEND must be 'nemo', 'whisper', 'faster-whisper', or 'transformers-asr' "
         f"(got {config.backend!r})"
     )
