@@ -255,7 +255,8 @@ class TransformersASRBackend:
             proc_inputs = self.processor(
                 audio, sampling_rate=16000, return_tensors="pt", language=self.language,
             )
-            proc_inputs = {k: v.to(self.device, dtype=self.model.dtype) for k, v in proc_inputs.items()}
+            audio_chunk_index = proc_inputs.get("audio_chunk_index")
+            proc_inputs = self._prepare_processor_inputs(proc_inputs)
 
             generate_kwargs = dict(proc_inputs)
             generate_kwargs["max_new_tokens"] = 256
@@ -263,14 +264,56 @@ class TransformersASRBackend:
             with torch.no_grad():
                 output_ids = self.model.generate(**generate_kwargs)
 
-            text = self.processor.decode(output_ids, skip_special_tokens=True)
+            decode_kwargs: dict[str, Any] = {"skip_special_tokens": True}
+            if audio_chunk_index is not None:
+                decode_kwargs["audio_chunk_index"] = audio_chunk_index
+                decode_kwargs["language"] = self.language
+
+            text = self.processor.decode(output_ids, **decode_kwargs)
             if isinstance(text, list):
-                text = " ".join(text)
+                text = " ".join(str(item).strip() for item in text if str(item).strip())
             hypotheses.append(SimpleHypothesis(text=str(text).strip(), timestamp={"word": [], "segment": []}))
 
         if return_hypotheses:
             return hypotheses
         return [hyp.text for hyp in hypotheses]
+
+    def _prepare_processor_inputs(self, proc_inputs: Any) -> dict[str, Any]:
+        """Move processor outputs to the model device without corrupting control tensors."""
+        target_device = getattr(self.model, "device", torch.device(self.device))
+        target_dtype = getattr(self.model, "dtype", self.torch_dtype)
+
+        moved: dict[str, Any] = {}
+        for key, value in dict(proc_inputs).items():
+            if isinstance(value, torch.Tensor):
+                if torch.is_floating_point(value) or torch.is_complex(value):
+                    value = value.to(target_device, dtype=target_dtype)
+                else:
+                    value = value.to(target_device)
+            moved[key] = value
+
+        self._normalize_cohere_input_features(moved)
+        return moved
+
+    def _normalize_cohere_input_features(self, proc_inputs: dict[str, Any]) -> None:
+        """Match Cohere's Conformer encoder layout: [batch, frames, mel_bins]."""
+        features = proc_inputs.get("input_features")
+        if not isinstance(features, torch.Tensor) or features.dim() != 3:
+            return
+
+        feature_size = self._cohere_feature_size(default=128)
+        if features.shape[1] == feature_size and features.shape[-1] != feature_size:
+            proc_inputs["input_features"] = features.transpose(1, 2).contiguous()
+
+    def _cohere_feature_size(self, default: int = 128) -> int:
+        feature_extractor = getattr(self.processor, "feature_extractor", None)
+        feature_size = getattr(feature_extractor, "feature_size", None)
+        if feature_size is None:
+            feature_size = getattr(feature_extractor, "num_mel_bins", None)
+        try:
+            return int(feature_size)
+        except (TypeError, ValueError):
+            return default
 
     def _prepare_input(self, item: Any) -> Any:
         if isinstance(item, (str, Path)):
