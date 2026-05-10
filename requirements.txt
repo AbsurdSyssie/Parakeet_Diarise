@@ -6,7 +6,7 @@ fastapi==0.115.6
 uvicorn==0.34.0
 python-multipart==0.0.9
 python-dotenv==1.0.1
-transformers>=5.4.0
+transformers==4.53.3
 accelerate==1.1.1
 safetensors==0.4.5
 faster-whisper==1.2.1
