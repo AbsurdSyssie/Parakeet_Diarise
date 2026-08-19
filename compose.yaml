@@ -3,8 +3,6 @@ services:
     build: .
     image: parakeet-diarise:api
     gpus: all
-    environment:
-      CUDA_LAUNCH_BLOCKING: "1"
     env_file:
       - .env
     volumes:

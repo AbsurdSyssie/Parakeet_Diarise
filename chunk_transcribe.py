@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Tuple
 import types
@@ -23,6 +24,14 @@ except Exception:  # pragma: no cover - optional for unit tests
 from asr_merge import build_chunk_meta, dedup_overlaps, offset_words, sort_words
 
 MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
+
+_TRAILING_LANGUAGE_TAG_RE = re.compile(
+    r"(?:\s*<[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+>)+\s*$"
+)
+
+
+def _strip_trailing_language_tags(text: str) -> str:
+    return _TRAILING_LANGUAGE_TAG_RE.sub("", text).strip()
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,18 +127,29 @@ def _merge_hypotheses(outputs, offsets):
 def _merge_texts(outputs, offsets) -> str:
     texts = []
     for hyp, offset_s in zip(outputs, offsets):
-        text = getattr(hyp, "text", "")
+        text = _strip_trailing_language_tags(str(getattr(hyp, "text", "") or ""))
         if text:
-            texts.append((offset_s, text.strip()))
+            texts.append((offset_s, text))
     texts.sort(key=lambda item: item[0])
-    merged = []
-    last = None
-    for _, text in texts:
-        if not text or text == last:
+    return _merge_text_fragments([text for _, text in texts])
+
+
+def _merge_text_fragments(texts: list[str]) -> str:
+    merged_words: list[str] = []
+    for text in texts:
+        words = text.split()
+        if not words:
             continue
-        merged.append(text)
-        last = text
-    return " ".join(merged)
+        max_overlap = min(len(merged_words), len(words), 20)
+        overlap = 0
+        for size in range(max_overlap, 0, -1):
+            left = [word.casefold().strip(".,!?;:\"'()[]") for word in merged_words[-size:]]
+            right = [word.casefold().strip(".,!?;:\"'()[]") for word in words[:size]]
+            if left == right:
+                overlap = size
+                break
+        merged_words.extend(words[overlap:])
+    return " ".join(merged_words)
 
 
 def _merge_segments(outputs, offsets) -> list[dict]:
@@ -269,7 +289,7 @@ def transcribe_chunks_with_model_mode(
 
     if timestamps == "word":
         words = dedup_overlaps(sort_words(words))
-    text = " ".join([t for t in texts if t])
+    text = _merge_text_fragments(texts)
     return {"words": words, "segments": segments, "text": text}
 
 
@@ -311,7 +331,7 @@ def transcribe_chunks_in_memory_mode(
 
     if timestamps == "word":
         words = dedup_overlaps(sort_words(words))
-    text = " ".join([t for t in texts if t])
+    text = _merge_text_fragments(texts)
     return {"words": words, "segments": segments, "text": text}
 
 

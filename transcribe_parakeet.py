@@ -1,27 +1,60 @@
 #!/usr/bin/env python3
-"""Minimal Parakeet transcription with timestamps."""
+"""Command-line transcription using any configured ASR backend."""
 
 import argparse
 import os
 import sys
 
-import types
-
 import torch
-import nemo.collections.asr as nemo_asr
 
-MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
+from asr_backend import ASRConfig, load_asr_backend, resolve_asr_model
+from chunk_transcribe import _patch_transcribe_dataloader_no_lhotse
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Transcribe a WAV file with Parakeet and print timestamps."
+        description="Transcribe an audio file with a selectable ASR backend."
     )
     parser.add_argument(
         "audio_path",
         nargs="?",
         default="example.wav",
-        help="Path to WAV file (default: example.wav)",
+        help="Path to an audio file (default: example.wav)",
+    )
+    parser.add_argument(
+        "--backend",
+        default=os.getenv("ASR_BACKEND", "nemo"),
+        choices=["nemo", "whisper", "faster-whisper", "transformers-asr", "hf-asr"],
+        help="ASR backend (default: ASR_BACKEND or nemo)",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.getenv("ASR_MODEL", ""),
+        help="Model alias or repository name (default: ASR_MODEL or backend default)",
+    )
+    parser.add_argument(
+        "--timestamps",
+        choices=["word", "segment", "none"],
+        default="word",
+        help="Timestamp detail to print (default: word)",
+    )
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        default=os.getenv("ASR_TRUST_REMOTE_CODE", "0").lower() in {"1", "true", "yes", "on"},
+        help="Allow model repository code (automatically enabled for the Granite alias)",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="auto, cpu, cuda, or cuda:N (default: auto)",
+    )
+    parser.add_argument(
+        "--attention-implementation",
+        choices=["sdpa", "flash_attention_2", "eager"],
+        default=os.getenv("ASR_ATTENTION_IMPLEMENTATION", "sdpa"),
+        help="Transformers attention implementation (default: sdpa)",
     )
     return parser.parse_args()
 
@@ -32,46 +65,31 @@ def main() -> int:
         print(f"Audio file not found: {args.audio_path}", file=sys.stderr)
         return 1
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_NAME)
-    asr_model = asr_model.to(device)
-
-    def _setup_transcribe_dataloader_no_lhotse(self, config):
-        if "manifest_filepath" in config:
-            manifest_filepath = config["manifest_filepath"]
-            batch_size = config["batch_size"]
-        else:
-            manifest_filepath = os.path.join(config["temp_dir"], "manifest.json")
-            batch_size = min(config["batch_size"], len(config["paths2audio_files"]))
-
-        dl_config = {
-            "use_lhotse": False,
-            "manifest_filepath": manifest_filepath,
-            "sample_rate": self.preprocessor._sample_rate,
-            "batch_size": batch_size,
-            "shuffle": False,
-            "num_workers": config.get("num_workers", min(batch_size, os.cpu_count() - 1)),
-            "pin_memory": True,
-            "channel_selector": config.get("channel_selector", None),
-            "use_start_end_token": self.cfg.validation_ds.get("use_start_end_token", False),
-        }
-
-        if config.get("augmentor"):
-            dl_config["augmentor"] = config.get("augmentor")
-
-        return self._setup_dataloader_from_config(config=dl_config)
-
-    # Avoid Lhotse path issues by patching the transcribe dataloader to set use_lhotse=False.
-    asr_model._setup_transcribe_dataloader = types.MethodType(
-        _setup_transcribe_dataloader_no_lhotse, asr_model
+    model_name = resolve_asr_model(args.backend, args.model)
+    is_granite = model_name.lower() == "ibm-granite/granite-speech-4.1-2b-nar"
+    config = ASRConfig(
+        backend=args.backend,
+        model_key=args.model or model_name,
+        model_name=model_name,
+        hf_token=os.getenv("HF_TOKEN"),
+        trust_remote_code=args.trust_remote_code or is_granite,
+        return_timestamps=args.timestamps != "none",
+        device=args.device,
+        attention_implementation=args.attention_implementation,
     )
+    asr_model = load_asr_backend(config)
+    device = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
+    if device == "auto":
+        device = "cpu"
+    asr_model = asr_model.to(device)
+    if args.backend == "nemo":
+        _patch_transcribe_dataloader_no_lhotse(asr_model)
 
     outputs = asr_model.transcribe(
         [args.audio_path],
-        timestamps=True,
+        timestamps=args.timestamps != "none",
         verbose=False,
-        batch_size=1,
+        batch_size=args.batch_size,
         num_workers=0,
         return_hypotheses=True,
     )
@@ -80,7 +98,7 @@ def main() -> int:
     print("TEXT:")
     print(hyp.text)
 
-    if hasattr(hyp, "timestamp") and isinstance(hyp.timestamp, dict):
+    if args.timestamps != "none" and hasattr(hyp, "timestamp") and isinstance(hyp.timestamp, dict):
         print("\nWORD TIMESTAMPS:")
         print(hyp.timestamp.get("word"))
         print("\nSEGMENT TIMESTAMPS:")

@@ -1,6 +1,6 @@
 # Parakeet + Diarise
 
-ASR + diarization service built around Parakeet transcription and Sortformer diarization. The API exposes an OpenAI-style `/v1/audio/transcriptions` endpoint with optional diarization.
+ASR + diarization service built around Parakeet transcription and Sortformer diarization. The API exposes an OpenAI-style `/v1/audio/transcriptions` endpoint with optional diarization. Runtime-selectable ASR adapters include Parakeet, Whisper, faster-whisper, Cohere Transcribe, and IBM Granite Speech.
 
 ## Quick start
 
@@ -11,6 +11,20 @@ docker compose up api
 
 API guide: `docs/api.md`
 
+One-off command-line transcription:
+
+```bash
+export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cu13/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+python transcribe_parakeet.py Examples/output_10s.mp3 \
+  --backend transformers-asr \
+  --model granite-speech-4.1-2b-nar \
+  --timestamps none
+```
+
+The historical `transcribe_parakeet.py AUDIO` command remains valid. Use
+`--backend` and `--model` to select another adapter.
+
 ## API (what to send + what you get back)
 
 ### Endpoints
@@ -19,6 +33,9 @@ ASR API (main service, `api.py`):
 
 - `POST /v1/audio/transcriptions` (multipart/form-data)
 - `GET /health`
+- `GET /v1/models`
+- `GET /v1/models/current`
+- `POST /v1/models/current`
 
 Standalone diarization service (optional, `diarize_api.py`):
 
@@ -109,6 +126,11 @@ Full request/response examples and schemas live in `docs/api.md`.
 
 Use `.env.example` as the template. Common settings:
 
+- `ASR_BACKEND`
+- `ASR_MODEL`
+- `ASR_TRUST_REMOTE_CODE`
+- `ASR_RETURN_TIMESTAMPS`
+- `ASR_ATTENTION_IMPLEMENTATION` (`sdpa`, `eager`, or optional `flash_attention_2`)
 - `HF_TOKEN` (required for diarization downloads)
 - `DIARIZE_URL` (external diarize service URL if used)
 - `DIARIZE_EMPTY_CACHE` (1 to `gc.collect()` + reset CUDA stats after diarize)
@@ -139,6 +161,7 @@ See `docs/api.md` for detailed VAD/energy-gate behavior and defaults.
 ## Docs
 
 - `docs/api.md` - endpoint, parameters, examples, response schema
+- `docs/granite.md` - IBM Granite Speech setup, CLI/API usage, and limitations
 - `docs/parakeet.md` - Parakeet notes and container guidance
 - `docs/pyannote.md` - legacy pyannote notes
 - `docs/sortformer.md` - Sortformer diarization notes

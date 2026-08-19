@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from asr_backend import (
     ASRConfig,
+    GraniteASRBackend,
     SimpleHypothesis,
     TransformersASRBackend,
     resolve_asr_model,
@@ -45,6 +47,10 @@ class TestResolveAsrModel(unittest.TestCase):
     def test_resolve_transformers_asr_alias(self):
         result = resolve_asr_model("transformers-asr", "cohere-transcribe-03-2026")
         self.assertEqual(result, "CohereLabs/cohere-transcribe-03-2026")
+
+    def test_resolve_granite_alias(self):
+        result = resolve_asr_model("transformers-asr", "granite-speech-4.1-2b-nar")
+        self.assertEqual(result, "ibm-granite/granite-speech-4.1-2b-nar")
 
     def test_resolve_hf_asr_default(self):
         result = resolve_asr_model("hf-asr", "")
@@ -191,6 +197,81 @@ class TestTransformersASRBackendTo(unittest.TestCase):
     def test_to_with_cuda(self):
         result = self.backend.to("cuda:0")
         self.assertIs(result, self.backend)
+
+
+class _FakeGraniteOutput:
+    def __init__(self):
+        self.preds = [torch.tensor([1, 2]), torch.tensor([3])]
+
+
+class _FakeGraniteModel:
+    def __init__(self):
+        self.inputs = None
+
+    def transcribe(self, **inputs):
+        self.inputs = inputs
+        return _FakeGraniteOutput()
+
+
+class _FakeGraniteProcessor:
+    def __init__(self):
+        self.audios = None
+        self.device = None
+
+    def __call__(self, audios, device):
+        self.audios = audios
+        self.device = device
+        return {
+            "input_features": torch.zeros(len(audios), 2, 160),
+            "attention_mask": torch.ones(len(audios), 2, dtype=torch.bool),
+        }
+
+    def batch_decode(self, preds):
+        self.preds = preds
+        return ["first transcript", "second transcript"]
+
+
+class TestGraniteASRBackend(unittest.TestCase):
+    def setUp(self):
+        self.backend = GraniteASRBackend.__new__(GraniteASRBackend)
+        self.backend.device = "cpu"
+        self.backend.processor = _FakeGraniteProcessor()
+        self.backend.model = _FakeGraniteModel()
+
+    def test_transcribe_batches_and_returns_text_only_hypotheses(self):
+        outputs = self.backend.transcribe(
+            [torch.zeros(16000), torch.zeros(8000)],
+            timestamps=True,
+            batch_size=2,
+        )
+
+        self.assertEqual([hyp.text for hyp in outputs], ["first transcript", "second transcript"])
+        self.assertEqual(outputs[0].timestamp, {"word": [], "segment": []})
+        self.assertEqual(self.backend.processor.device, "cpu")
+        self.assertEqual(len(self.backend.processor.audios), 2)
+        self.assertIn("attention_mask", self.backend.model.inputs)
+
+    def test_prepare_audio_downmixes_tensor(self):
+        result = self.backend._prepare_audio(torch.stack([torch.ones(4), torch.zeros(4)]))
+        self.assertEqual(tuple(result.shape), (4,))
+        self.assertTrue(torch.allclose(result, torch.full((4,), 0.5)))
+
+    def test_prepare_audio_uses_soundfile_when_torchcodec_is_missing(self):
+        import numpy as np
+
+        with (
+            patch("asr_backend.torchaudio.load", side_effect=ImportError("TorchCodec is required")),
+            patch("soundfile.read", return_value=(np.ones((4, 2), dtype=np.float32), 16000)),
+        ):
+            result = self.backend._prepare_audio("example.mp3")
+
+        self.assertEqual(tuple(result.shape), (4,))
+        self.assertTrue(torch.allclose(result, torch.ones(4)))
+
+    def test_cuda_request_fails_without_cuda(self):
+        if not torch.cuda.is_available():
+            with self.assertRaises(RuntimeError):
+                GraniteASRBackend._resolve_device("cuda")
 
 
 class TestLoadASRConfig(unittest.TestCase):

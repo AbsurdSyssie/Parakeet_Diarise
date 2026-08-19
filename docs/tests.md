@@ -7,6 +7,8 @@ These are the tests that already exist in `test/` and what they validate:
 - `test/asr_debug_levers.py`: CLI harness that sweeps ASR API parameters (VAD, chunking, timestamps) and writes per-run JSON plus a `summary.json` with suspect-word and boundary diagnostics. Use it to compare boundary artifacts across settings.
 - `test/test_api_response.py`: Verifies `api_response.build_response` output shape, text override, and speaker list extraction.
 - `test/test_chunk_transcribe.py`: Validates `_merge_hypotheses` offsets and timestamp shifting for concatenated chunk outputs.
+- `test/test_asr_backend.py`: Validates backend/model aliases, Granite batching and decoding, text-only hypotheses, audio downmixing, and device validation without downloading model weights.
+- `test/test_chunk_transcribe.py`: Also validates text overlap removal for timestamp-free ASR models across chunk and batch seams.
 - `test/test_health_endpoints.py`: Static checks that `/health` route decorators exist in `api.py` and `diarize_api.py`.
 - `test/test_merge_diarized.py`: Checks word-to-speaker assignment and segment grouping in `diarize_align` (including empty-turn handling).
 

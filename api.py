@@ -95,6 +95,7 @@ ASR_TRUST_REMOTE_CODE = _get_env_bool("ASR_TRUST_REMOTE_CODE", "0")
 ASR_RETURN_TIMESTAMPS = _get_env_bool("ASR_RETURN_TIMESTAMPS", "0")
 ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
 ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
+ASR_ATTENTION_IMPLEMENTATION = os.getenv("ASR_ATTENTION_IMPLEMENTATION", "").strip() or None
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
 
 MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
@@ -112,6 +113,15 @@ MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
         backend="nemo",
         model_name="nvidia/parakeet-tdt-1.1b",
         description="NVIDIA Parakeet TDT 1.1B via NeMo",
+        supports_word_timestamps=True,
+        supports_segment_timestamps=True,
+        supports_diarization=True,
+    ),
+    "nemotron-3.5-asr-streaming-0.6b": ModelRegistryEntry(
+        id="nemotron-3.5-asr-streaming-0.6b",
+        backend="nemo",
+        model_name="nvidia/nemotron-3.5-asr-streaming-0.6b",
+        description="NVIDIA Nemotron 3.5 ASR Streaming 0.6B via NeMo",
         supports_word_timestamps=True,
         supports_segment_timestamps=True,
         supports_diarization=True,
@@ -140,6 +150,17 @@ MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
         model_name="CohereLabs/cohere-transcribe-03-2026",
         description="Cohere Transcribe via Transformers custom ASR backend",
         trust_remote_code=ASR_TRUST_REMOTE_CODE,
+        return_timestamps=False,
+        supports_word_timestamps=False,
+        supports_segment_timestamps=False,
+        supports_diarization=False,
+    ),
+    "granite-speech-4.1-2b-nar": ModelRegistryEntry(
+        id="granite-speech-4.1-2b-nar",
+        backend="transformers-asr",
+        model_name="ibm-granite/granite-speech-4.1-2b-nar",
+        description="IBM Granite Speech 4.1 2B NAR via Transformers custom model",
+        trust_remote_code=True,
         return_timestamps=False,
         supports_word_timestamps=False,
         supports_segment_timestamps=False,
@@ -215,6 +236,7 @@ def _public_config(config: ASRConfig | None) -> dict[str, Any] | None:
         "return_timestamps": config.return_timestamps,
         "chunk_length_s": config.chunk_length_s,
         "stride_length_s": config.stride_length_s,
+        "attention_implementation": config.attention_implementation,
         "supports_word_timestamps": bool(entry.supports_word_timestamps) if entry else None,
         "supports_segment_timestamps": bool(entry.supports_segment_timestamps) if entry else None,
         "supports_diarization": bool(entry.supports_diarization) if entry else None,
@@ -245,6 +267,7 @@ def _config_from_entry(
         return_timestamps=requested_timestamps,
         chunk_length_s=entry.chunk_length_s,
         stride_length_s=entry.stride_length_s,
+        attention_implementation=ASR_ATTENTION_IMPLEMENTATION,
     )
 
 
@@ -265,6 +288,7 @@ def _initial_config_from_env() -> ASRConfig:
                 return_timestamps=ASR_RETURN_TIMESTAMPS,
                 chunk_length_s=ASR_CHUNK_LENGTH_S,
                 stride_length_s=ASR_STRIDE_LENGTH_S,
+                attention_implementation=ASR_ATTENTION_IMPLEMENTATION,
             )
         raise RuntimeError(
             "ASR_MODEL must be one of the curated /v1/models entries "
@@ -276,10 +300,11 @@ def _initial_config_from_env() -> ASRConfig:
         return_timestamps=ASR_RETURN_TIMESTAMPS if ASR_RETURN_TIMESTAMPS else None,
     )
     if config.backend in {"transformers-asr", "hf-asr"}:
-        config.trust_remote_code = ASR_TRUST_REMOTE_CODE
+        config.trust_remote_code = config.trust_remote_code or ASR_TRUST_REMOTE_CODE
         config.return_timestamps = ASR_RETURN_TIMESTAMPS
         config.chunk_length_s = ASR_CHUNK_LENGTH_S
         config.stride_length_s = ASR_STRIDE_LENGTH_S
+        config.attention_implementation = ASR_ATTENTION_IMPLEMENTATION
     return config
 
 
@@ -646,6 +671,7 @@ def health():
         "asr_return_timestamps": ASR_RETURN_TIMESTAMPS,
         "asr_chunk_length_s": ASR_CHUNK_LENGTH_S,
         "asr_stride_length_s": ASR_STRIDE_LENGTH_S,
+        "asr_attention_implementation": ASR_ATTENTION_IMPLEMENTATION,
         "active_model": _public_config(_ACTIVE_CONFIG),
         "model_switch": dict(_MODEL_STATE),
         "available_models_count": len(MODEL_REGISTRY),

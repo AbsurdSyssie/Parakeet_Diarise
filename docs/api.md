@@ -16,9 +16,35 @@ docker compose up api
 
 ## Current status
 
-- ASR API loads Parakeet once at startup and logs per-request transcription time.
+- ASR API loads the selected ASR adapter once at startup and logs per-request transcription time.
 - Silero VAD is cached in-process to avoid reloading on each request.
 - VAD chunking uses hard-cuts with overlap (30s max, 1.0s overlap) for continuous audio.
+
+## ASR model selection
+
+Startup selection uses `ASR_BACKEND` and `ASR_MODEL`. For Granite:
+
+```env
+ASR_BACKEND=transformers-asr
+ASR_MODEL=granite-speech-4.1-2b-nar
+ASR_TRUST_REMOTE_CODE=1
+ASR_RETURN_TIMESTAMPS=0
+ASR_ATTENTION_IMPLEMENTATION=sdpa
+```
+
+List and switch curated models:
+
+```bash
+curl http://localhost:8000/v1/models
+
+curl -X POST http://localhost:8000/v1/models/current \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"granite-speech-4.1-2b-nar"}'
+```
+
+Granite Speech 4.1 2B NAR returns transcript text without word or segment
+timestamps. Requests therefore use `timestamps=none`, and
+`diarization=true` is rejected for this model.
 
 ## Endpoint
 
