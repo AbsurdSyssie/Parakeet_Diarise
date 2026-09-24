@@ -4,14 +4,37 @@ This repo exposes an OpenAI-style transcription endpoint with optional diarizati
 
 ## Services
 
-- ASR API: `http://localhost:8000`
+- ASR API: `http://localhost:$API_PORT` (`8000` by default)
 - Diarization runs in-process inside the ASR API through NeMo `SortformerEncLabelModel` when `diarization=true`. The default model is `nvidia/Nemotron-3-Diarization`.
 
 ## Build + run
 
+Set the API port and startup models in `.env`:
+
+```env
+API_PORT=8000
+ASR_BACKEND=nemo
+ASR_MODEL=parakeet-1.1b
+DIARIZATION_MODEL=nvidia/Nemotron-3-Diarization
+```
+
+Then run:
+
 ```bash
-docker compose build api
-docker compose up api
+docker compose up --build api
+```
+
+Compose publishes `API_PORT` and starts Uvicorn on the same container port. Shell variables can override `.env` for one run:
+
+```bash
+API_PORT=9000 ASR_MODEL=parakeet-0.6b docker compose up --build api
+```
+
+Without Docker:
+
+```bash
+python scripts/run_api.py
+python scripts/run_api.py --port 9000
 ```
 
 For a development bind mount:
