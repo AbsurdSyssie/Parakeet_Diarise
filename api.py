@@ -29,7 +29,7 @@ from model_manager import (
 from model_registry import (
     MODEL_REGISTRY,
     config_from_entry,
-    effective_timestamps,
+    effective_timestamps as resolve_effective_timestamps,
     find_model_entry,
     initial_config,
     public_config,
@@ -436,7 +436,7 @@ async def transcribe(
             with MODEL_MANAGER.lock:
                 asr_model, active_config = _active_model_or_503()
                 _validate_request_for_config(active_config, diarization=diarization, timestamps=timestamps)
-                effective_timestamps = effective_timestamps(active_config, timestamps)
+                effective_timestamps = resolve_effective_timestamps(active_config, timestamps)
                 result = transcribe_chunks_in_memory_mode(
                     asr_model=asr_model,
                     chunks=chunks,
@@ -492,7 +492,7 @@ async def transcribe(
             with MODEL_MANAGER.lock:
                 asr_model, active_config = _active_model_or_503()
                 _validate_request_for_config(active_config, diarization=diarization, timestamps=timestamps)
-                effective_timestamps = effective_timestamps(active_config, timestamps)
+                effective_timestamps = resolve_effective_timestamps(active_config, timestamps)
                 result = transcribe_chunks_with_model_mode(
                     asr_model=asr_model,
                     chunk_dir=chunk_dir,
