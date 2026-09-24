@@ -207,7 +207,7 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 | Path | Purpose |
 | --- | --- |
 | `api.py` | Main ASR and diarization API |
-| `asr_backend.py` | ASR backend loading and model resolution |
+| `asr/` | ASR adapters, model aliases, shared types, and backend dispatch |\n| `asr_backend.py` | Compatibility facade for the previous ASR import path |
 | `chunk_transcribe.py` | Chunk transcription |
 | `vad_chunk.py` | VAD and chunk generation |
 | `diarize_align.py` | Speaker-to-word alignment |
