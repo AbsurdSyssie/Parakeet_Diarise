@@ -97,6 +97,7 @@ ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
 ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
 ASR_ATTENTION_IMPLEMENTATION = os.getenv("ASR_ATTENTION_IMPLEMENTATION", "").strip() or None
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
 
 MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
     "parakeet-0.6b": ModelRegistryEntry(
@@ -676,6 +677,8 @@ def health():
         "model_switch": dict(_MODEL_STATE),
         "available_models_count": len(MODEL_REGISTRY),
         "hf_token_configured": bool(HF_TOKEN),
+        "diarization_model": DIARIZATION_MODEL,
+        "diarization_loaded": _DIAR_MODEL is not None,
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
@@ -773,7 +776,8 @@ def _get_diar_model():
 
     from nemo.collections.asr.models import SortformerEncLabelModel
 
-    model = SortformerEncLabelModel.from_pretrained("nvidia/diar_streaming_sortformer_4spk-v2.1")
+    print(f"Loading diarization model: {DIARIZATION_MODEL}")
+    model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
     model.eval()
     if torch.cuda.is_available():
         model.to(torch.device("cuda"))
@@ -782,14 +786,22 @@ def _get_diar_model():
     model.sortformer_modules.chunk_right_context = 40
     model.sortformer_modules.fifo_len = 40
     model.sortformer_modules.spkcache_update_period = 300
+    if hasattr(model, "_check_streaming_parameters"):
+        model._check_streaming_parameters()
 
     _DIAR_MODEL = model
     return model
 
 
-def _normalize_speaker(label: str) -> str:
+def _normalize_speaker(label: Any) -> str:
+    if isinstance(label, int):
+        return f"SPEAKER_{label:02d}"
     if not isinstance(label, str):
         return "UNKNOWN"
+
+    label = label.strip()
+    if label.isdigit():
+        return f"SPEAKER_{int(label):02d}"
     if label.startswith("SPEAKER_"):
         return label
     if label.startswith("speaker_"):
@@ -801,7 +813,7 @@ def _normalize_speaker(label: str) -> str:
     return label
 
 
-def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]:
+def _run_diarization(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]:
     model = _get_diar_model()
     wav = waveform.unsqueeze(0) if waveform.dim() == 1 else waveform
     mono_path = tmpdir / "diarize_mono16k.wav"
@@ -879,7 +891,7 @@ def _build_vad_params(
 async def transcribe(
     file: UploadFile = File(...),
     response_format: Literal["verbose_json"] = Form("verbose_json", description="Only supported response format."),
-    diarization: bool = Form(False, description="Enable Sortformer diarization. Requires timestamps=word."),
+    diarization: bool = Form(False, description="Enable speaker diarization. Requires timestamps=word."),
     timestamps: Literal["word", "segment", "none"] = Form("word", description="word, segment, or none. word required for diarization."),
     language: str = Form("en", description="Currently only response metadata; active model language is selected at model load."),
     chunk_mode: Literal["memory", "file"] = Form("memory", description="memory (default) or file (writes chunk WAVs to disk)."),
@@ -1125,7 +1137,7 @@ async def transcribe(
 
         if diarization:
             start_diar = time.perf_counter()
-            turns = _run_sortformer(waveform, sr, Path(tmpdir))
+            turns = _run_diarization(waveform, sr, Path(tmpdir))
             diar_elapsed = time.perf_counter() - start_diar
             print(f"diarization in {diar_elapsed:.2f}s")
             words_with_speaker = assign_speakers(words, turns)
