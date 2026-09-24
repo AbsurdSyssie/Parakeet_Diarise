@@ -66,8 +66,8 @@ predicted_segments = model.diarize(
 ## Dry runs
 
 ```bash
-python test/sortformer_dry.py --audio path/to/audio.wav
-python test/sortformer_align_dry.py --audio path/to/audio.wav
+python scripts/probes/diarization_dry.py --audio path/to/audio.wav
+python scripts/probes/diarization_align.py --audio path/to/audio.wav
 ```
 
 Both scripts honor `DIARIZATION_MODEL`.
