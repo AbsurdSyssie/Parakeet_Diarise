@@ -9,5 +9,4 @@ services:
       - ./Output/.cache:/app/.cache
     working_dir: /app
     ports:
-      - "8000:8000"
-    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
