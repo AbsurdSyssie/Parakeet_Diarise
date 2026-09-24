@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diarization API service using NeMo Sortformer."""
+"""Standalone speaker diarization API using a configurable NeMo Sortformer model."""
 
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ import soundfile as sf
 import gc
 import torch
 import torchaudio
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, UploadFile
 from nemo.collections.asr.models import SortformerEncLabelModel
 
 app = FastAPI()
 
+DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
 _MODEL = None
 
 
@@ -34,7 +35,8 @@ def cuda_mem():
 def health():
     return {
         "ok": True,
-        "pipeline_loaded": _PIPELINE is not None,
+        "diarization_loaded": _MODEL is not None,
+        "diarization_model": DIARIZATION_MODEL,
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
@@ -49,9 +51,8 @@ def _get_model() -> SortformerEncLabelModel:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    model = SortformerEncLabelModel.from_pretrained(
-        "nvidia/diar_streaming_sortformer_4spk-v2.1"
-    )
+    print(f"Loading diarization model: {DIARIZATION_MODEL}")
+    model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
     model.eval()
     if torch.cuda.is_available():
         model.to(torch.device("cuda"))
@@ -60,14 +61,22 @@ def _get_model() -> SortformerEncLabelModel:
     model.sortformer_modules.chunk_right_context = 40
     model.sortformer_modules.fifo_len = 40
     model.sortformer_modules.spkcache_update_period = 300
+    if hasattr(model, "_check_streaming_parameters"):
+        model._check_streaming_parameters()
 
     _MODEL = model
     return model
 
 
-def _normalize_speaker(label: str) -> str:
+def _normalize_speaker(label) -> str:
+    if isinstance(label, int):
+        return f"SPEAKER_{label:02d}"
     if not isinstance(label, str):
         return "UNKNOWN"
+
+    label = label.strip()
+    if label.isdigit():
+        return f"SPEAKER_{int(label):02d}"
     if label.startswith("SPEAKER_"):
         return label
     if label.startswith("speaker_"):
