@@ -6,7 +6,6 @@ services:
     env_file:
       - .env
     volumes:
-      - .:/app
       - ./Output/.cache:/app/.cache
     working_dir: /app
     ports:
