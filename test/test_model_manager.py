@@ -22,6 +22,7 @@ def settings():
         asr_chunk_length_s=None,
         asr_stride_length_s=None,
         asr_attention_implementation=None,
+        diarization_model="nvidia/Nemotron-3-Diarization",
         vad_sample_rate=16000,
         disable_cuda_graphs=False,
     )
