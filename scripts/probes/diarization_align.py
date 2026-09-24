@@ -12,13 +12,14 @@ import soundfile as sf
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from settings import SETTINGS
 from diarization import diarize_waveform
 from diarize_align import assign_speakers, group_words_into_segments
 
 
 DEFAULT_AUDIO = "Examples/MoreOrLess.wav"
 DEFAULT_OUT_DIR = "tmp/probes/diarization_align"
-ASR_URL = "http://localhost:8000/v1/audio/transcriptions"
+ASR_URL = f"http://localhost:{SETTINGS.api_port}/v1/audio/transcriptions"
 
 
 def run_asr(audio_path: Path):
