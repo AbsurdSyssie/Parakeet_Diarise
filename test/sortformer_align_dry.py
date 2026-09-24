@@ -17,6 +17,7 @@ from diarize_align import assign_speakers, group_words_into_segments
 DEFAULT_AUDIO = "Examples/MoreOrLess.wav"
 DEFAULT_OUT_DIR = "test/tmp/sortformer_align"
 ASR_URL = "http://localhost:8000/v1/audio/transcriptions"
+DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
 
 
 def normalize_speaker(label: str) -> str:
@@ -96,12 +97,14 @@ def pick_tmp_dir(out_dir: Path) -> Path:
 
 
 def run_sortformer(audio_path: Path, tmp_dir: Path):
-    diar_model = SortformerEncLabelModel.from_pretrained("nvidia/diar_streaming_sortformer_4spk-v2.1")
+    diar_model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
     diar_model.eval()
     diar_model.sortformer_modules.chunk_len = 340
     diar_model.sortformer_modules.chunk_right_context = 40
     diar_model.sortformer_modules.fifo_len = 40
     diar_model.sortformer_modules.spkcache_update_period = 300
+    if hasattr(diar_model, "_check_streaming_parameters"):
+        diar_model._check_streaming_parameters()
 
     waveform = load_audio_mono_16k(audio_path)
     audio_np = waveform.squeeze(0).numpy().astype("float32")
