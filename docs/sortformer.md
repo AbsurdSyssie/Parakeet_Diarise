@@ -28,7 +28,7 @@ DIARIZATION_MODEL=nvidia/diar_streaming_sortformer_4spk-v2.1
 
 NVIDIA's Nemotron 3 Diarization instructions require Python 3.12 or later and NeMo ASR support. The repository Docker image uses Python 3.12.
 
-The selected model is loaded lazily the first time diarization is requested, then retained in memory until the ASR model is switched or the service is restarted.
+The shared runtime in `diarization.py` loads the selected model lazily on the first diarization request. Both `api.py` and `diarize_api.py` use that runtime, so model loading, audio preparation, speaker normalization, and output parsing have one implementation.
 
 ## Inference configuration
 
@@ -54,7 +54,7 @@ predicted_segments = model.diarize(
 )
 ```
 
-The main API already converts uploaded audio to mono 16 kHz before diarization. Speaker turns are normalized to `SPEAKER_00`, `SPEAKER_01`, and so on, then aligned to ASR word timestamps by `diarize_align.py`.
+`diarization.py` converts audio to mono 16 kHz before inference. Speaker turns are normalized to `SPEAKER_00`, `SPEAKER_01`, and so on, then aligned to ASR word timestamps by `diarize_align.py`.
 
 ## Environment variables
 
