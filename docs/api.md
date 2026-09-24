@@ -57,6 +57,8 @@ Parameters (multipart/form-data):
 | `file` | audio file | required | WAV/FLAC/MP3 tested. |
 | `response_format` | `verbose_json` | `verbose_json` | Only supported format. |
 | `diarization` | `true` or `false` | `false` | Requires `timestamps=word`. |
+| `diarization_backend` | `streaming`, `offline` | `streaming` | Offline Sortformer is intended for shorter A/B tests and uses memory proportional to recording length. |
+| `num_speakers` | `1`–`4` | unset | Optional known count; retains the globally most active posterior channels. |
 | `timestamps` | `word`, `segment`, `none` | `word` | `word` required for diarization. |
 | `language` | `en` | `en` | Passed through to response. |
 | `chunk_mode` | `memory`, `file` | `memory` | `file` writes chunks to disk. |
@@ -77,7 +79,9 @@ Optional VAD overrides (per-request). If omitted, environment defaults apply:
 | `vad_target_max_s` | float | env `VAD_TARGET_MAX_S` (default `20.0`) |
 | `vad_hard_max_s` | float | env `VAD_HARD_MAX_S` (default `30.0`) |
 | `vad_overlap_s` | float | env `VAD_OVERLAP_S` (default `1.0`) |
-| `vad_speech_pad_ms` | int | env `VAD_SPEECH_PAD_MS` (default `250`) |
+| `vad_speech_pad_ms` | int | env `VAD_SPEECH_PAD_MS` (default `80`; passed to Silero) |
+| `vad_asr_context_pad_ms` | int | env `VAD_ASR_CONTEXT_PAD_MS` (default `250`; waveform context for ASR) |
+| `vad_target_merge_max_gap_s` | float | env `VAD_TARGET_MERGE_MAX_GAP_S` (default `1.5`) |
 | `vad_energy_gate` | `true` or `false` | env `VAD_ENERGY_GATE` (default `0`) |
 | `vad_energy_db` | float | env `VAD_ENERGY_DB` (default `-35`) |
 | `vad_energy_frame_ms` | int | env `VAD_ENERGY_FRAME_MS` (default `100`) |
@@ -208,11 +212,13 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 ## Notes
 
 - `.env` must contain `HF_TOKEN` for diarization. Use `.env.example` as a template.
-- Current default VAD tuning: threshold 0.38, target_max 20s, hard_max 30s, overlap 1.0s, merge_gap 200ms, speech_pad 0ms.
+- Current default VAD tuning: threshold 0.30, target_max 20s, hard_max 30s, overlap 1.0s, merge_gap 200ms, Silero pad 80ms, and ASR context pad 250ms.
 - VAD chunking uses 0ms padding by default.
 - Default `chunk_mode=memory` avoids writing WAVs to disk, reduces decode/IO overhead, and keeps GPU utilization higher.
 - Use `chunk_mode=file` only if you need chunk WAVs persisted for debugging or if you suspect in-memory batching is unstable.
-- `diarization=true` requires `timestamps=word` because speaker alignment uses word-level timestamps.
+- `diarization=true` requires `timestamps=word`. Sortformer runs with NVIDIA post-processing and returns soft activity probabilities; each ASR word is labelled from its duration-weighted speaker posterior. `speaker_confidence` and `speaker_margin` are returned per word. Thresholds are configurable with `DIAR_WORD_*` environment variables.
+- `DIAR_POSTPROCESSING_YAML` defaults to `configs/sortformer_postprocessing.yaml`. Set it to an empty value to bypass post-processing for an A/B comparison.
+- The normal path runs pinned `silero-vad` directly. `VAD_ENERGY_GATE=1` is retained only as an experimental optimisation and is ignored when `force_vad=on`.
 - In-memory chunking is the default for the API; file-based chunking is still available via `chunk_mode=file`.
 - Short `UNKNOWN` speaker segments (<=0.6s or <=2 words) are merged into neighboring segments; if the same speaker appears on both sides, the segments are coalesced.
 - Local Sortformer experiments live in `test/sortformer_dry.py` and `test/sortformer_align_dry.py`.

@@ -1,0 +1,59 @@
+[
+  {
+    "audio": "Examples/Depression CSA case with RCGP Examiner Commentary - CSA Prep  Episode 3b.mp3",
+    "duration_s": 744.49,
+    "preprocess_s": 6.802,
+    "inference_s": 50.752,
+    "total_s": 57.554,
+    "realtime_factor": 0.0682,
+    "audio_seconds_per_inference_second": 14.67,
+    "peak_cuda_mb": 3335.8,
+    "segments": 76,
+    "words": 2321,
+    "speakers": [
+      "speaker_0",
+      "speaker_1",
+      "speaker_2",
+      "speaker_3"
+    ],
+    "model_load_s": 11.739
+  },
+  {
+    "audio": "Examples/Send Help - Angry Movie Review.mp3",
+    "duration_s": 2479.287,
+    "preprocess_s": 31.056,
+    "inference_s": 172.903,
+    "total_s": 203.96,
+    "realtime_factor": 0.0697,
+    "audio_seconds_per_inference_second": 14.34,
+    "peak_cuda_mb": 4358.0,
+    "segments": 247,
+    "words": 8488,
+    "speakers": [
+      "speaker_0",
+      "speaker_1",
+      "speaker_2",
+      "speaker_3"
+    ],
+    "model_load_s": 11.739
+  },
+  {
+    "audio": "Examples/The Man Warning The West Trump Is Changing The World Behind The Scenes.mp3",
+    "duration_s": 5725.785,
+    "preprocess_s": 75.889,
+    "inference_s": 421.805,
+    "total_s": 497.694,
+    "realtime_factor": 0.0737,
+    "audio_seconds_per_inference_second": 13.57,
+    "peak_cuda_mb": 6272.8,
+    "segments": 164,
+    "words": 18373,
+    "speakers": [
+      "speaker_0",
+      "speaker_1",
+      "speaker_2",
+      "speaker_3"
+    ],
+    "model_load_s": 11.739
+  }
+]

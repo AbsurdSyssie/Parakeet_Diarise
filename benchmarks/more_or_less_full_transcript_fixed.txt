@@ -1,0 +1,52 @@
+Duration: 08:57.809
+Speakers: SPEAKER_00, SPEAKER_01, UNKNOWN
+
+[00:00.240 - 01:29.814] SPEAKER_00: Hello and thanks for downloading the More or Less Podcast with a programme that looks at the numbers in the news, in life, and in statistical models predicting climate catastrophe. I'm Tim Harford. Whether we like it or not, global warming is happening. The global temperature has already gone up, and it's going to go up more, because the atmosphere is already full of carbon dioxide and other greenhouse gases, and we're continuing to add to that stock. Quite how much it will increase by is a very important question for all of us. Until relatively recently, during much of the 2010s and into the 2020s, many scientists claimed that if we just kept on with business as usual, then by the end of the century, global temperatures would increase by nearly 5 degrees centigrade. That, in case you're wondering, is a big number. Since pre-industrial times so far, they're up by a bit over 1 degree. This projection was based on something called RCP 8.5, a statistical scenario used by scientists to model the future of the climate. You can still find scientific papers published in 2025 that make the same claim. However, there's a good case that RCP 8.5 should never have been used as a business as usual scenario. And in hindsight, it doesn't look like an accurate vision of the future at all. So what's going on?
+
+[01:30.694 - 01:56.814] SPEAKER_01: So I am Dr. Zeke Hausfather. I'm a climate scientist and the climate research lead at Stripe, which is a financial technology company. Back in 2020, I published a piece in Nature, the world's sort of foremost scientific journal, along with a researcher in Norway named Glenn Peters. And in it, we essentially argued that the climate science community had been making a mistake for the last decade. And that mistake is that they had been conflating the worst case scenario with the most likely outcome.
+
+[01:57.294 - 02:16.294] SPEAKER_00: Climate modeling is an important part of figuring out climate change. But in order to work out how much the temperature is going to rise in the coming decades, you need to know how much greenhouse gas we're going to emit, how much coal and oil will burn and how many cows will burp methane and so on. This is not an easy question.
+
+[02:16.774 - 02:40.174] SPEAKER_01: It depends on a huge amount of factors, on how much population grows, on how wealthy we get, on how fast different technologies develop and change in price. And so climate scientists and energy system modelers have put together scenarios where they essentially say here's a number of different outcomes that could happen this century in terms of our emissions. And then those outcomes, those scenarios, are used by climate modelers to run climate model simulations.
+
+[02:40.734 - 02:44.174] SPEAKER_00: RCP 8.5 was one of those scenarios.
+
+[02:44.814 - 03:07.814] SPEAKER_01: RCP stands for representative concentration pathway, essentially a illustrative example of the concentration of CO2 in the atmosphere and other greenhouse gases that might occur by the end of the century. And 8.5 is is in technical jargon the watts per meter squared radiative forcing, but really it it's just a measure of how much heat is being trapped by greenhouse gases by the end of the century.
+
+[03:09.094 - 03:30.534] SPEAKER_00: Our story starts at the turn of the 2010s. In the run-up to a key international climate report from the IPCC, the Intergovernmental Panel on Climate Change, there was a big effort to upgrade the existing scenarios with some better models. There were all kinds of RCPs, imagining different levels of international action on climate change. You know,
+
+[03:30.614 - 03:44.574] SPEAKER_01: RCP.5 in particular, the paper that published the scenario in 2011, described it as the 90th percentile of no policy baseline outcomes, essentially the 9 out of 10 worst outcomes in a world where we don't care about climate change.
+
+[03:44.894 - 04:03.934] SPEAKER_00: In this scenario, the model predicted the world might be roughly 4.5 degrees warmer by the end of the century, although with some big uncertainties on either side. This was a scenario which the modellers thought was at the extreme edge of what was possible if the world did nothing to mitigate climate change.
+
+[04:04.254 - 04:13.174] SPEAKER_01: It had some pretty extreme assumptions. Like it had the world burning five times more coal by the end of the century than they were burning in 2010. You know, it had global emissions tripling.
+
+[04:13.814 - 04:23.094] SPEAKER_00: In one of the imaginary realities that leads to this outcome, oil becomes scarce, and there's a widespread use of coal as a fuel for cars.
+
+[04:23.574 - 04:32.694] SPEAKER_01: You can actually turn coal into what we call sinfuel, essentially synthetic petrol. South Africa actually did this at pretty large scales during the apartheid era. Aaron Powell
+
+[04:32.854 - 04:52.094] SPEAKER_00: Indeed, some analysts think the model predicted we'd burn more coal than it's realistic to think could be extracted from the ground. But the real problem isn't that. The researchers who created RCP eight point five were transparent that it was a worst case scenario if the world didn't act on climate change.
+
+[05:03.334 - 05:18.534] SPEAKER_01: there was increasing use of this high-end scenario, RCP.5, as you know, business as usual is the term a lot of people referred to it as. And it was never intended to be business as usual. It was sort of the worst case of the universe of business as usual outcomes, but not necessarily the most likely outcome.
+
+[05:18.934 - 05:39.854] SPEAKER_00: In major reports from the UN and IPCC down, RCP eight point five was used as the business as usual case, to contrast with what would happen if the world acted to cut climate emissions. This was where we were probably heading if we did nothing. And Zeke says there was arguably some justification for this interpretation early on.
+
+[05:40.574 - 06:05.734] SPEAKER_01: Global emissions had increased by a third in in just the prior decade, between 2000 and 2010. China was building two new coal plants a day. The idea that the 21st century could be dominated by coal didn't seem unrealistic. There was also, you know, a number of papers published at the time that argued that actual global emissions were tracking at or above RCP 8.5 levels, Which was actually true through almost 2015 or so. Aaron Ross Powell
+
+[06:05.974 - 06:09.814] SPEAKER_00: However, RCP eight point five did not age well.
+
+[06:10.534 - 06:33.374] SPEAKER_01: Obviously, today, when solar is the cheapest form of new energy in the world and almost all energy, or electricity at least being added globally, is coming from renewables. It does seem crazy, but that's a very new phenomenon. And even the proponents of clean energy technology, you know, 15 years ago did not expect things to get as cheap as they have as quickly as they have. Aaron Powell
+
+[06:33.614 - 06:50.094] SPEAKER_00: Instead of shooting up, coal use has plateaued, renewables have boomed, and a world where we run cars on coal seems like a strange and alarmist fairy tale. RCP eight point five was always meant to describe an unlikely sequence of events.
+
+[06:50.574 - 07:00.454] SPEAKER_01: But I think it has moved in the last fifteen years from the worst case scenario to an implausible or I would even say impossible scenario, given the progress we've made. Aaron Powell
+
+[07:00.694 - 07:21.974] SPEAKER_00: It no longer makes sense to talk about business as usual, as a world where we don't act on climate change at all and don't invest in renewable energy. While recent talks in Brazil showed that the world is uh not in full agreement yet, if we just carry on at our current trajectory, we're not going to hit anything like that level of fossil fuel use.
+
+[07:22.614 - 08:03.734] SPEAKER_01: It's hard to predict the future. And any prediction I make will probably be wrong. But based on the estimates we have today of where the world is likely headed, if we don't enact stronger climate policies than we have right now, you know, we'll probably have emissions be flat for the next few decades and then falling gradually by the end of the century as just technology gets cheaper, um, fossil fuels potentially get more expensive. In that world, we end up somewhere between two and a half and three degrees warming. And a world of you know, close to three degrees warming also has a lot of really severe impacts, uh, particularly in natural systems and in places that you know don't have the adaptive capacity that we have in rich countries.
+
+[08:04.054 - 08:32.414] SPEAKER_00: Since Zeke and others pointed out the problems with RCP eight point five, he says the big climate organizations have largely stopped using it to talk about business as usual. But the ghost of RCP eight point five is still haunting the discussion. It still pops up in the occasional graph or calculation and appears sporadically in scientific papers. But Zeke is confident that serious climate scientists have largely left it behind.
+
+[08:32.654 - 08:41.454] SPEAKER_01: I see this as the natural way that science advances. It's a messy process. It is often slower than we'd like. But it is ultimately self-correcting.
+
+[08:41.694 - 08:55.454] SPEAKER_00: Thanks to Zeke Housefather. And that's it for this week. But do get in touch if you've seen a number you think we should take a look at. Our email address is more or less at bbc.co.uk. Until next week, goodbye.

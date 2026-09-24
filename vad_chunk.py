@@ -115,11 +115,10 @@ def _load_vad(device: str):
     global _VAD_MODEL, _VAD_UTILS, _VAD_LOADED_AT
     if _VAD_MODEL is None or _VAD_UTILS is None:
         start = time.perf_counter()
-        _VAD_MODEL, _VAD_UTILS = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            trust_repo=True,
-        )
+        from silero_vad import get_speech_timestamps, load_silero_vad, save_audio
+
+        _VAD_MODEL = load_silero_vad()
+        _VAD_UTILS = (get_speech_timestamps, save_audio, None, None, None)
         _VAD_LOADED_AT = time.perf_counter() - start
         print(f"silero_vad load in {_VAD_LOADED_AT:.2f}s (device={device})")
     else:
@@ -268,6 +267,8 @@ def run_vad_chunks_from_waveform(
     chunk_sample_rate: int | None = None,
     energy_gate_override: bool | None = None,
     energy_overrides: dict | None = None,
+    asr_context_pad_ms: int | None = None,
+    target_merge_max_gap_s: float = 1.5,
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -342,6 +343,7 @@ def run_vad_chunks_from_waveform(
                     min_speech_duration_ms=min_speech_ms,
                     min_silence_duration_ms=min_silence_ms,
                     speech_pad_ms=speech_pad_ms,
+                    max_speech_duration_s=hard_max_s if hard_max_s > 0 else float("inf"),
                 )
                 for ts in seg_ts:
                     speech_timestamps.append(
@@ -361,6 +363,7 @@ def run_vad_chunks_from_waveform(
                 min_speech_duration_ms=min_speech_ms,
                 min_silence_duration_ms=min_silence_ms,
                 speech_pad_ms=speech_pad_ms,
+                max_speech_duration_s=hard_max_s if hard_max_s > 0 else float("inf"),
             )
             for ts in seg_ts:
                 speech_timestamps.append(
@@ -382,6 +385,7 @@ def run_vad_chunks_from_waveform(
         target_min_samples = int(sample_rate * target_min_s)
         target_max_samples = int(sample_rate * target_max_s)
         hard_max_samples = int(sample_rate * hard_max_s)
+        target_merge_max_gap_samples = int(sample_rate * target_merge_max_gap_s)
 
         chunks = []
         cur_start = speech_timestamps[0]["start"]
@@ -392,12 +396,16 @@ def run_vad_chunks_from_waveform(
             next_end = ts["end"]
             gap = next_start - cur_end
 
-            if (next_end - cur_start) <= target_max_samples:
+            if gap <= target_merge_max_gap_samples and (next_end - cur_start) <= target_max_samples:
                 cur_end = next_end
                 continue
 
             cur_len = cur_end - cur_start
-            if cur_len < target_min_samples and (next_end - cur_start) <= hard_max_samples:
+            if (
+                gap <= target_merge_max_gap_samples
+                and cur_len < target_min_samples
+                and (next_end - cur_start) <= hard_max_samples
+            ):
                 cur_end = next_end
                 continue
             if cur_len > hard_max_samples and hard_max_samples > 0:
@@ -440,7 +448,8 @@ def run_vad_chunks_from_waveform(
 
     source_waveform = chunk_waveform if chunk_waveform is not None else audio
     source_rate = chunk_sample_rate if chunk_sample_rate is not None else sample_rate
-    pad_samples = int(source_rate * (speech_pad_ms / 1000.0))
+    context_pad_ms = speech_pad_ms if asr_context_pad_ms is None else asr_context_pad_ms
+    pad_samples = int(source_rate * (context_pad_ms / 1000.0))
     max_len = source_waveform.shape[-1]
 
     for idx, ts in enumerate(speech_timestamps, start=1):
@@ -505,6 +514,8 @@ def run_vad_chunks_in_memory_from_waveform(
     chunk_sample_rate: int | None = None,
     energy_gate_override: bool | None = None,
     energy_overrides: dict | None = None,
+    asr_context_pad_ms: int | None = None,
+    target_merge_max_gap_s: float = 1.5,
 ) -> list[dict]:
     device = _resolve_vad_device()
     energy_overrides = energy_overrides or {}
@@ -577,6 +588,7 @@ def run_vad_chunks_in_memory_from_waveform(
                     min_speech_duration_ms=min_speech_ms,
                     min_silence_duration_ms=min_silence_ms,
                     speech_pad_ms=speech_pad_ms,
+                    max_speech_duration_s=hard_max_s if hard_max_s > 0 else float("inf"),
                 )
                 for ts in seg_ts:
                     speech_timestamps.append(
@@ -596,6 +608,7 @@ def run_vad_chunks_in_memory_from_waveform(
                 min_speech_duration_ms=min_speech_ms,
                 min_silence_duration_ms=min_silence_ms,
                 speech_pad_ms=speech_pad_ms,
+                max_speech_duration_s=hard_max_s if hard_max_s > 0 else float("inf"),
             )
             for ts in seg_ts:
                 speech_timestamps.append(
@@ -617,6 +630,7 @@ def run_vad_chunks_in_memory_from_waveform(
         target_min_samples = int(sample_rate * target_min_s)
         target_max_samples = int(sample_rate * target_max_s)
         hard_max_samples = int(sample_rate * hard_max_s)
+        target_merge_max_gap_samples = int(sample_rate * target_merge_max_gap_s)
 
         chunks = []
         cur_start = speech_timestamps[0]["start"]
@@ -627,12 +641,16 @@ def run_vad_chunks_in_memory_from_waveform(
             next_end = ts["end"]
             gap = next_start - cur_end
 
-            if (next_end - cur_start) <= target_max_samples:
+            if gap <= target_merge_max_gap_samples and (next_end - cur_start) <= target_max_samples:
                 cur_end = next_end
                 continue
 
             cur_len = cur_end - cur_start
-            if cur_len < target_min_samples and (next_end - cur_start) <= hard_max_samples:
+            if (
+                gap <= target_merge_max_gap_samples
+                and cur_len < target_min_samples
+                and (next_end - cur_start) <= hard_max_samples
+            ):
                 cur_end = next_end
                 continue
 
@@ -674,7 +692,8 @@ def run_vad_chunks_in_memory_from_waveform(
 
     source_waveform = chunk_waveform if chunk_waveform is not None else waveform
     source_rate = chunk_sample_rate if chunk_sample_rate is not None else sample_rate
-    pad_samples = int(source_rate * (speech_pad_ms / 1000.0))
+    context_pad_ms = speech_pad_ms if asr_context_pad_ms is None else asr_context_pad_ms
+    pad_samples = int(source_rate * (context_pad_ms / 1000.0))
     max_len = source_waveform.shape[-1]
 
     for ts in speech_timestamps:

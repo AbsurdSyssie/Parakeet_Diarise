@@ -1,0 +1,98 @@
+[
+  {
+    "audio": "Examples/MoreOrLessFull.wav",
+    "duration_s": 537.809,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": false,
+    "device": "cuda",
+    "load_s": 1.348,
+    "inference_s": 1.15,
+    "realtime_factor": 0.002,
+    "segments": 55,
+    "probability_shape": [
+      6723,
+      4
+    ],
+    "mean_activity": [
+      0.5057,
+      0.4254,
+      0.0001,
+      0.0
+    ],
+    "max_rss_mb": 2238.0,
+    "peak_cuda_mb": 786.4
+  },
+  {
+    "audio": "Examples/MoreOrLessFull.wav",
+    "duration_s": 537.809,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": true,
+    "device": "cuda",
+    "load_s": 1.348,
+    "inference_s": 0.803,
+    "realtime_factor": 0.001,
+    "segments": 64,
+    "probability_shape": [
+      6723,
+      4
+    ],
+    "mean_activity": [
+      0.5057,
+      0.4254,
+      0.0001,
+      0.0
+    ],
+    "max_rss_mb": 2337.3,
+    "peak_cuda_mb": 795.6
+  },
+  {
+    "audio": "Examples/MoreOrLessFull.wav",
+    "duration_s": 537.809,
+    "backend": "offline",
+    "model": "nvidia/diar_sortformer_4spk-v1",
+    "postprocessing": false,
+    "device": "cuda",
+    "load_s": 1.304,
+    "inference_s": 2.006,
+    "realtime_factor": 0.004,
+    "segments": 127,
+    "probability_shape": [
+      6723,
+      4
+    ],
+    "mean_activity": [
+      0.4805,
+      0.4058,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 3203.5,
+    "peak_cuda_mb": 10535.8
+  },
+  {
+    "audio": "Examples/MoreOrLessFull.wav",
+    "duration_s": 537.809,
+    "backend": "offline",
+    "model": "nvidia/diar_sortformer_4spk-v1",
+    "postprocessing": true,
+    "device": "cuda",
+    "load_s": 1.304,
+    "inference_s": 2.164,
+    "realtime_factor": 0.004,
+    "segments": 135,
+    "probability_shape": [
+      6723,
+      4
+    ],
+    "mean_activity": [
+      0.4805,
+      0.4058,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 3203.7,
+    "peak_cuda_mb": 10535.8
+  }
+]

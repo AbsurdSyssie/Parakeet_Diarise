@@ -30,7 +30,7 @@ from chunk_transcribe import (
     transcribe_chunks_in_memory_mode,
     transcribe_chunks_with_model_mode,
 )
-from diarize_align import assign_speakers, group_words_into_segments
+from diarize_align import assign_speakers, assign_speakers_from_probabilities, group_words_into_segments
 from vad_chunk import run_vad_chunks_from_waveform, run_vad_chunks_in_memory_from_waveform
 
 load_dotenv()
@@ -766,24 +766,39 @@ def _startup_load_model() -> None:
             raise
 
 
-def _get_diar_model():
+def _get_diar_model(backend: str = "streaming"):
     global _DIAR_MODEL
-    if _DIAR_MODEL is not None:
-        return _DIAR_MODEL
+    if _DIAR_MODEL is None:
+        _DIAR_MODEL = {}
+    if backend in _DIAR_MODEL:
+        return _DIAR_MODEL[backend]
+    if _DIAR_MODEL:
+        # The offline and streaming checkpoints are large; never retain both.
+        old_models = list(_DIAR_MODEL.values())
+        _DIAR_MODEL.clear()
+        del old_models
+        _cleanup_cuda()
 
     from nemo.collections.asr.models import SortformerEncLabelModel
 
-    model = SortformerEncLabelModel.from_pretrained("nvidia/diar_streaming_sortformer_4spk-v2.1")
+    model_names = {
+        "streaming": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+        "offline": "nvidia/diar_sortformer_4spk-v1",
+    }
+    if backend not in model_names:
+        raise ValueError(f"Unsupported diarization backend: {backend}")
+    model = SortformerEncLabelModel.from_pretrained(model_names[backend])
     model.eval()
     if torch.cuda.is_available():
         model.to(torch.device("cuda"))
 
-    model.sortformer_modules.chunk_len = 340
-    model.sortformer_modules.chunk_right_context = 40
-    model.sortformer_modules.fifo_len = 40
-    model.sortformer_modules.spkcache_update_period = 300
+    if backend == "streaming":
+        model.sortformer_modules.chunk_len = 340
+        model.sortformer_modules.chunk_right_context = 40
+        model.sortformer_modules.fifo_len = 40
+        model.sortformer_modules.spkcache_update_period = 300
 
-    _DIAR_MODEL = model
+    _DIAR_MODEL[backend] = model
     return model
 
 
@@ -801,12 +816,41 @@ def _normalize_speaker(label: str) -> str:
     return label
 
 
-def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]:
-    model = _get_diar_model()
+def _run_sortformer(
+    waveform: torch.Tensor,
+    sr: int,
+    tmpdir: Path,
+    *,
+    backend: str = "streaming",
+) -> tuple[list[dict], torch.Tensor | None, float]:
+    model = _get_diar_model(backend)
     wav = waveform.unsqueeze(0) if waveform.dim() == 1 else waveform
     mono_path = tmpdir / "diarize_mono16k.wav"
     torchaudio.save(str(mono_path), wav, sr)
-    predicted_segments = model.diarize(audio=[str(mono_path)], batch_size=1)
+    postprocessing = os.getenv(
+        "DIAR_POSTPROCESSING_YAML", "configs/sortformer_postprocessing.yaml"
+    ).strip()
+    if postprocessing:
+        postprocessing_path = Path(postprocessing).expanduser()
+        if not postprocessing_path.is_absolute():
+            postprocessing_path = Path(__file__).resolve().parent / postprocessing_path
+        if not postprocessing_path.is_file():
+            raise RuntimeError(f"DIAR_POSTPROCESSING_YAML not found: {postprocessing_path}")
+        postprocessing = str(postprocessing_path)
+    diarize_kwargs = {
+        "audio": [str(mono_path)],
+        "batch_size": 1,
+        "include_tensor_outputs": True,
+    }
+    if postprocessing:
+        diarize_kwargs["postprocessing_yaml"] = postprocessing
+    diarized = model.diarize(**diarize_kwargs)
+    if isinstance(diarized, tuple) and len(diarized) == 2:
+        predicted_segments, tensor_outputs = diarized
+        probabilities = tensor_outputs[0] if tensor_outputs else None
+    else:
+        predicted_segments = diarized
+        probabilities = None
     raw = predicted_segments[0] if predicted_segments else []
     turns = []
     for seg in raw:
@@ -829,7 +873,14 @@ def _run_sortformer(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]
             continue
         turns.append({"start": start, "end": end, "speaker": _normalize_speaker(speaker)})
     turns.sort(key=lambda t: (t["start"], t["end"]))
-    return turns
+    frame_duration_s = _get_env_float("DIAR_FRAME_DURATION_S", "0.08")
+    if probabilities is not None:
+        probabilities = torch.as_tensor(probabilities).detach().cpu()
+        if probabilities.ndim == 3 and probabilities.shape[0] == 1:
+            probabilities = probabilities[0]
+        max_frames = max(1, int((waveform.shape[-1] / sr) / frame_duration_s + 0.999999))
+        probabilities = probabilities[:max_frames]
+    return turns, probabilities, frame_duration_s
 
 
 def _build_vad_params(
@@ -843,6 +894,8 @@ def _build_vad_params(
     vad_hard_max_s: float,
     vad_overlap_s: float,
     vad_speech_pad_ms: int,
+    vad_asr_context_pad_ms: int,
+    vad_target_merge_max_gap_s: float,
     force_vad: str,
     vad_energy_gate: Optional[bool],
     vad_energy_db: Optional[float],
@@ -863,6 +916,8 @@ def _build_vad_params(
         "hard_max_s": vad_hard_max_s,
         "overlap_s": vad_overlap_s,
         "speech_pad_ms": vad_speech_pad_ms,
+        "asr_context_pad_ms": vad_asr_context_pad_ms,
+        "target_merge_max_gap_s": vad_target_merge_max_gap_s,
         "force_vad": force_vad,
         "energy_gate": vad_energy_gate,
         "energy_db": vad_energy_db,
@@ -880,6 +935,8 @@ async def transcribe(
     file: UploadFile = File(...),
     response_format: Literal["verbose_json"] = Form("verbose_json", description="Only supported response format."),
     diarization: bool = Form(False, description="Enable Sortformer diarization. Requires timestamps=word."),
+    diarization_backend: Literal["streaming", "offline"] = Form("streaming", description="Sortformer backend; offline uses more memory on long files."),
+    num_speakers: Optional[int] = Form(None, description="Optional known speaker count (1-4) used to prune inactive Sortformer channels."),
     timestamps: Literal["word", "segment", "none"] = Form("word", description="word, segment, or none. word required for diarization."),
     language: str = Form("en", description="Currently only response metadata; active model language is selected at model load."),
     chunk_mode: Literal["memory", "file"] = Form("memory", description="memory (default) or file (writes chunk WAVs to disk)."),
@@ -895,7 +952,9 @@ async def transcribe(
     vad_target_max_s: Optional[float] = Form(None, description="Target max chunk length (s). Default env VAD_TARGET_MAX_S=20.0."),
     vad_hard_max_s: Optional[float] = Form(None, description="Hard max chunk length (s). Default env VAD_HARD_MAX_S=30.0."),
     vad_overlap_s: Optional[float] = Form(None, description="Chunk overlap (s). Default env VAD_OVERLAP_S=1.0."),
-    vad_speech_pad_ms: Optional[int] = Form(None, description="Pad speech edges (ms). Default env VAD_SPEECH_PAD_MS=250."),
+    vad_speech_pad_ms: Optional[int] = Form(None, description="Silero boundary padding (ms). Default env VAD_SPEECH_PAD_MS=80."),
+    vad_asr_context_pad_ms: Optional[int] = Form(None, description="Extra ASR waveform context (ms). Default env VAD_ASR_CONTEXT_PAD_MS=250."),
+    vad_target_merge_max_gap_s: Optional[float] = Form(None, description="Maximum silence crossed while aggregating target chunks. Default env VAD_TARGET_MERGE_MAX_GAP_S=1.5."),
     vad_energy_gate: Optional[bool] = Form(None, description="Enable/disable energy gate (default env VAD_ENERGY_GATE=0)."),
     vad_energy_db: Optional[float] = Form(None, description="Energy gate threshold (dB). Default env VAD_ENERGY_DB=-35."),
     vad_energy_frame_ms: Optional[int] = Form(None, description="Energy gate frame size (ms). Default env VAD_ENERGY_FRAME_MS=100."),
@@ -913,6 +972,8 @@ async def transcribe(
         raise HTTPException(status_code=400, detail="chunk_mode must be 'memory' or 'file'")
     if force_vad not in {"off", "on"}:
         raise HTTPException(status_code=400, detail="force_vad must be 'off' or 'on'")
+    if num_speakers is not None and not 1 <= num_speakers <= 4:
+        raise HTTPException(status_code=400, detail="num_speakers must be between 1 and 4")
 
     with _MODEL_LOCK:
         _, initial_config = _active_model_or_503()
@@ -961,8 +1022,10 @@ async def transcribe(
         vad_target_max_s = vad_target_max_s if vad_target_max_s is not None else _get_env_float("VAD_TARGET_MAX_S", "20.0")
         vad_hard_max_s = vad_hard_max_s if vad_hard_max_s is not None else _get_env_float("VAD_HARD_MAX_S", "30.0")
         vad_overlap_s = vad_overlap_s if vad_overlap_s is not None else _get_env_float("VAD_OVERLAP_S", "1.0")
-        vad_speech_pad_ms = vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "250")
-        pad_s = vad_speech_pad_ms / 1000.0
+        vad_speech_pad_ms = vad_speech_pad_ms if vad_speech_pad_ms is not None else _get_env_int("VAD_SPEECH_PAD_MS", "80")
+        vad_asr_context_pad_ms = vad_asr_context_pad_ms if vad_asr_context_pad_ms is not None else _get_env_int("VAD_ASR_CONTEXT_PAD_MS", "250")
+        vad_target_merge_max_gap_s = vad_target_merge_max_gap_s if vad_target_merge_max_gap_s is not None else _get_env_float("VAD_TARGET_MERGE_MAX_GAP_S", "1.5")
+        pad_s = vad_asr_context_pad_ms / 1000.0
 
         energy_gate_override = None if force_vad == "off" else False
         energy_overrides = {}
@@ -989,6 +1052,8 @@ async def transcribe(
             vad_hard_max_s=vad_hard_max_s,
             vad_overlap_s=vad_overlap_s,
             vad_speech_pad_ms=vad_speech_pad_ms,
+            vad_asr_context_pad_ms=vad_asr_context_pad_ms,
+            vad_target_merge_max_gap_s=vad_target_merge_max_gap_s,
             force_vad=force_vad,
             vad_energy_gate=vad_energy_gate,
             vad_energy_db=vad_energy_db,
@@ -1019,6 +1084,8 @@ async def transcribe(
                 chunk_sample_rate=sr,
                 energy_gate_override=energy_gate_override,
                 energy_overrides=energy_overrides,
+                asr_context_pad_ms=vad_asr_context_pad_ms,
+                target_merge_max_gap_s=vad_target_merge_max_gap_s,
             )
             vad_elapsed = time.perf_counter() - vad_start
             if trace_audio and chunks:
@@ -1075,6 +1142,8 @@ async def transcribe(
                 chunk_sample_rate=sr,
                 energy_gate_override=energy_gate_override,
                 energy_overrides=energy_overrides,
+                asr_context_pad_ms=vad_asr_context_pad_ms,
+                target_merge_max_gap_s=vad_target_merge_max_gap_s,
             )
             vad_elapsed = time.perf_counter() - vad_start
             if trace_audio and chunk_paths:
@@ -1125,10 +1194,25 @@ async def transcribe(
 
         if diarization:
             start_diar = time.perf_counter()
-            turns = _run_sortformer(waveform, sr, Path(tmpdir))
+            turns, speaker_probabilities, diar_frame_duration_s = _run_sortformer(
+                waveform, sr, Path(tmpdir), backend=diarization_backend
+            )
             diar_elapsed = time.perf_counter() - start_diar
             print(f"diarization in {diar_elapsed:.2f}s")
-            words_with_speaker = assign_speakers(words, turns)
+            if speaker_probabilities is not None:
+                words_with_speaker = assign_speakers_from_probabilities(
+                    words,
+                    speaker_probabilities,
+                    audio_duration_s=duration,
+                    frame_duration_s=diar_frame_duration_s,
+                    num_speakers=num_speakers,
+                    confidence_threshold=_get_env_float("DIAR_WORD_CONFIDENCE_THRESHOLD", "0.35"),
+                    margin_threshold=_get_env_float("DIAR_WORD_MARGIN_THRESHOLD", "0.10"),
+                    unknown_threshold=_get_env_float("DIAR_WORD_UNKNOWN_THRESHOLD", "0.15"),
+                    neighbour_bonus=_get_env_float("DIAR_WORD_NEIGHBOUR_BONUS", "0.15"),
+                )
+            else:
+                words_with_speaker = assign_speakers(words, turns)
         else:
             words_with_speaker = [{**w, "speaker": w.get("speaker") or "UNKNOWN"} for w in words]
 

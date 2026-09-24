@@ -1,0 +1,36 @@
+[
+  {
+    "audio": "Examples/output_10s.mp3",
+    "duration_s": 9.993,
+    "preprocess_s": 0.123,
+    "inference_s": 0.741,
+    "total_s": 0.865,
+    "realtime_factor": 0.0742,
+    "audio_seconds_per_inference_second": 13.48,
+    "peak_cuda_mb": 2942.3,
+    "segments": 1,
+    "words": 30,
+    "speakers": [
+      "speaker_0"
+    ],
+    "model_load_s": 17.559
+  },
+  {
+    "audio": "Examples/MoreOrLessFull.wav",
+    "duration_s": 537.809,
+    "preprocess_s": 0.016,
+    "inference_s": 37.638,
+    "total_s": 37.654,
+    "realtime_factor": 0.07,
+    "audio_seconds_per_inference_second": 14.29,
+    "peak_cuda_mb": 3213.4,
+    "segments": 26,
+    "words": 1502,
+    "speakers": [
+      "speaker_0",
+      "speaker_1",
+      "speaker_2"
+    ],
+    "model_load_s": 17.559
+  }
+]

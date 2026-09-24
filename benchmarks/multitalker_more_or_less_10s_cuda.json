@@ -1,0 +1,18 @@
+[
+  {
+    "audio": "Examples/MoreOrLess.wav",
+    "duration_s": 9.993,
+    "preprocess_s": 0.129,
+    "inference_s": 0.715,
+    "total_s": 0.844,
+    "realtime_factor": 0.0716,
+    "audio_seconds_per_inference_second": 13.97,
+    "peak_cuda_mb": 2942.3,
+    "segments": 1,
+    "words": 30,
+    "speakers": [
+      "speaker_0"
+    ],
+    "model_load_s": 13.741
+  }
+]

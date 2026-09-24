@@ -1,0 +1,50 @@
+[
+  {
+    "audio": "Examples/Depression CSA case with RCGP Examiner Commentary - CSA Prep  Episode 3b.mp3",
+    "duration_s": 744.49,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": false,
+    "device": "cuda",
+    "load_s": 1.223,
+    "inference_s": 1.378,
+    "realtime_factor": 0.002,
+    "segments": 154,
+    "probability_shape": [
+      9306,
+      4
+    ],
+    "mean_activity": [
+      0.4767,
+      0.2069,
+      0.2022,
+      0.0254
+    ],
+    "max_rss_mb": 2300.7,
+    "peak_cuda_mb": 908.3
+  },
+  {
+    "audio": "Examples/Depression CSA case with RCGP Examiner Commentary - CSA Prep  Episode 3b.mp3",
+    "duration_s": 744.49,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": true,
+    "device": "cuda",
+    "load_s": 1.223,
+    "inference_s": 1.145,
+    "realtime_factor": 0.002,
+    "segments": 152,
+    "probability_shape": [
+      9306,
+      4
+    ],
+    "mean_activity": [
+      0.4767,
+      0.2069,
+      0.2022,
+      0.0254
+    ],
+    "max_rss_mb": 2438.3,
+    "peak_cuda_mb": 917.4
+  }
+]

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Sequence
+
+import torch
 
 
 def assign_speakers(
@@ -65,6 +67,108 @@ def assign_speakers(
         words_out.append({**word, "speaker": best_speaker})
 
     return words_out
+
+
+def assign_speakers_from_probabilities(
+    words: List[Dict[str, Any]],
+    probabilities: torch.Tensor | Sequence[Sequence[float]],
+    *,
+    audio_duration_s: float,
+    frame_duration_s: float | None = None,
+    num_speakers: int | None = None,
+    confidence_threshold: float = 0.35,
+    margin_threshold: float = 0.10,
+    unknown_threshold: float = 0.15,
+    neighbour_bonus: float = 0.15,
+) -> List[Dict[str, Any]]:
+    """Assign words by integrating Sortformer speaker posteriors over each word.
+
+    The returned confidence is the winning mean posterior and margin is the
+    difference from the runner-up. Low-confidence words may use adjacent,
+    confidently-labelled words as a weak prior; very-low-confidence words stay
+    UNKNOWN.
+    """
+    if not words:
+        return []
+    probs = torch.as_tensor(probabilities, dtype=torch.float32).detach().cpu()
+    if probs.ndim == 3 and probs.shape[0] == 1:
+        probs = probs[0]
+    if probs.ndim != 2 or probs.shape[0] == 0 or probs.shape[1] == 0 or audio_duration_s <= 0:
+        return [
+            {**word, "speaker": "UNKNOWN", "speaker_confidence": 0.0, "speaker_margin": 0.0}
+            for word in words
+        ]
+
+    if num_speakers is not None:
+        if num_speakers < 1 or num_speakers > probs.shape[1]:
+            raise ValueError(f"num_speakers must be between 1 and {probs.shape[1]}")
+        active = torch.topk(probs.mean(dim=0), k=num_speakers).indices.sort().values
+        probs = probs[:, active]
+        speaker_indices = active.tolist()
+    else:
+        speaker_indices = list(range(probs.shape[1]))
+
+    frame_s = frame_duration_s or (audio_duration_s / probs.shape[0])
+    scored: List[Dict[str, Any]] = []
+    for word in words:
+        ws = max(0.0, float(word["start"]))
+        we = min(audio_duration_s, float(word["end"]))
+        if we <= ws:
+            scores = torch.zeros(probs.shape[1])
+        else:
+            first = max(0, int(ws // frame_s))
+            last = min(probs.shape[0] - 1, int(max(ws, we - 1e-9) // frame_s))
+            weights = []
+            frames = []
+            for frame_idx in range(first, last + 1):
+                overlap = max(0.0, min(we, (frame_idx + 1) * frame_s) - max(ws, frame_idx * frame_s))
+                if overlap > 0:
+                    weights.append(overlap)
+                    frames.append(probs[frame_idx])
+            scores = (
+                torch.stack(frames).mul(torch.tensor(weights).unsqueeze(1)).sum(dim=0) / sum(weights)
+                if frames
+                else torch.zeros(probs.shape[1])
+            )
+        ranked = torch.argsort(scores, descending=True)
+        best_local = int(ranked[0])
+        confidence = float(scores[best_local])
+        runner_up = float(scores[int(ranked[1])]) if len(ranked) > 1 else 0.0
+        margin = confidence - runner_up
+        confident = confidence >= confidence_threshold and margin >= margin_threshold
+        scored.append(
+            {
+                **word,
+                "speaker": f"SPEAKER_{speaker_indices[best_local]:02d}" if confident else "UNKNOWN",
+                "speaker_confidence": round(confidence, 4),
+                "speaker_margin": round(margin, 4),
+                "_speaker_scores": scores,
+            }
+        )
+
+    # Smooth only ambiguous words that still have meaningful speaker evidence.
+    for idx, word in enumerate(scored):
+        if word["speaker"] != "UNKNOWN" or word["speaker_confidence"] < unknown_threshold:
+            continue
+        adjusted = word["_speaker_scores"].clone()
+        for neighbour_idx in (idx - 1, idx + 1):
+            if 0 <= neighbour_idx < len(scored):
+                label = scored[neighbour_idx]["speaker"]
+                if label.startswith("SPEAKER_"):
+                    channel = int(label.rsplit("_", 1)[1])
+                    if channel in speaker_indices:
+                        adjusted[speaker_indices.index(channel)] += neighbour_bonus
+        ranked = torch.argsort(adjusted, descending=True)
+        best_local = int(ranked[0])
+        adjusted_margin = float(adjusted[best_local]) - (
+            float(adjusted[int(ranked[1])]) if len(ranked) > 1 else 0.0
+        )
+        if adjusted_margin >= margin_threshold:
+            word["speaker"] = f"SPEAKER_{speaker_indices[best_local]:02d}"
+
+    for word in scored:
+        word.pop("_speaker_scores", None)
+    return scored
 
 
 def group_words_into_segments(

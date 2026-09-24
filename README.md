@@ -57,11 +57,13 @@ Optional form fields:
 - `chunk_mode=memory|file` (default `memory`)
 - `chunk_only=true|false` (default `false`)
 - `trace_audio=true|false` (default `false`)
-- `force_vad=off|on` (default `off`)
+- `force_vad=off|on` (default `on`; the energy gate is experimental opt-in only)
 - Per-request VAD overrides:
   - `vad_sample_rate`, `vad_threshold`, `vad_min_speech_ms`, `vad_min_silence_ms`
   - `vad_merge_gap_ms`, `vad_target_min_s`, `vad_target_max_s`, `vad_hard_max_s`
-  - `vad_overlap_s`, `vad_speech_pad_ms`
+  - `vad_overlap_s`, `vad_speech_pad_ms`, `vad_asr_context_pad_ms`
+  - `vad_target_merge_max_gap_s`
+  - `diarization_backend=streaming|offline`, `num_speakers=1..4`
   - `vad_energy_gate`, `vad_energy_db`, `vad_energy_frame_ms`, `vad_energy_min_active_ms`
   - `vad_energy_merge_gap_ms`, `vad_energy_active_skip`
   - `vad_uniform_chunk_s`, `vad_uniform_overlap_s`
@@ -135,6 +137,9 @@ Use `.env.example` as the template. Common settings:
 - `DIARIZE_URL` (external diarize service URL if used)
 - `DIARIZE_EMPTY_CACHE` (1 to `gc.collect()` + reset CUDA stats after diarize)
 - `DIARIZE_TF32` (1 to enable TF32 in CUDA matmul/cudnn)
+- `DIAR_POSTPROCESSING_YAML` (defaults to the bundled NVIDIA starting configuration)
+- `DIAR_FRAME_DURATION_S`, `DIAR_WORD_CONFIDENCE_THRESHOLD`, `DIAR_WORD_MARGIN_THRESHOLD`
+- `DIAR_WORD_UNKNOWN_THRESHOLD`, `DIAR_WORD_NEIGHBOUR_BONUS`
 - `VAD_DEVICE` (`cpu` or `cuda`)
 - `VAD_SAMPLE_RATE`
 - `VAD_THRESHOLD`
@@ -146,6 +151,8 @@ Use `.env.example` as the template. Common settings:
 - `VAD_HARD_MAX_S`
 - `VAD_OVERLAP_S`
 - `VAD_SPEECH_PAD_MS`
+- `VAD_ASR_CONTEXT_PAD_MS`
+- `VAD_TARGET_MERGE_MAX_GAP_S`
 - `VAD_ENERGY_GATE`
 - `VAD_ENERGY_DB`
 - `VAD_ENERGY_FRAME_MS`

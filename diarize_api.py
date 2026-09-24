@@ -34,7 +34,7 @@ def cuda_mem():
 def health():
     return {
         "ok": True,
-        "pipeline_loaded": _PIPELINE is not None,
+        "pipeline_loaded": _MODEL is not None,
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
@@ -102,7 +102,14 @@ async def diarize(file: UploadFile = File(...)):
         sf.write(str(mono_path), waveform.numpy(), sr)
 
         print(f"cuda mem before diarize: {cuda_mem()}")
-        predicted_segments = model.diarize(audio=[str(mono_path)], batch_size=1)
+        diarize_kwargs = {"audio": [str(mono_path)], "batch_size": 1}
+        postprocessing = os.environ.get("DIAR_POSTPROCESSING_YAML", "").strip()
+        if postprocessing:
+            postprocessing_path = Path(postprocessing).expanduser().resolve()
+            if not postprocessing_path.is_file():
+                raise HTTPException(status_code=500, detail=f"Post-processing config not found: {postprocessing_path}")
+            diarize_kwargs["postprocessing_yaml"] = str(postprocessing_path)
+        predicted_segments = model.diarize(**diarize_kwargs)
         diarize_elapsed = time.perf_counter() - start_req
         print(f"diarize in {diarize_elapsed:.2f}s")
         print(f"cuda mem after diarize: {cuda_mem()}")

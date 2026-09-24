@@ -21,7 +21,7 @@ try:
 except Exception:  # pragma: no cover - optional for unit tests
     nemo_asr = None
 
-from asr_merge import build_chunk_meta, dedup_overlaps, offset_words, sort_words
+from asr_merge import build_chunk_meta, offset_words, reconcile_chunk_words
 
 MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
 
@@ -195,7 +195,8 @@ def transcribe_chunks_with_model(
     if not chunks:
         return []
 
-    merged_words = []
+    chunk_word_lists: list[list[dict]] = []
+    chunk_spans: list[tuple[float, float]] = []
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
         paths = [str(item[0]) for item in batch]
@@ -209,10 +210,12 @@ def transcribe_chunks_with_model(
             num_workers=0,
             return_hypotheses=True,
         )
-        merged_words.extend(_merge_hypotheses(outputs, offsets))
+        for (path, _), hyp, offset_s in zip(batch, outputs, offsets):
+            meta = build_chunk_meta(path.name, pad_left_s, pad_right_s)
+            chunk_word_lists.append(_merge_hypotheses([hyp], [offset_s]))
+            chunk_spans.append((meta.orig_start_s, meta.orig_end_s))
 
-    merged_words = dedup_overlaps(sort_words(merged_words))
-    return merged_words
+    return reconcile_chunk_words(chunk_word_lists, chunk_spans)
 
 
 def transcribe_chunks_in_memory(
@@ -224,7 +227,8 @@ def transcribe_chunks_in_memory(
     if not chunks:
         return []
 
-    merged_words = []
+    chunk_word_lists: list[list[dict]] = []
+    chunk_spans: list[tuple[float, float]] = []
     for start in range(0, len(chunks), batch_size):
         batch = chunks[start : start + batch_size]
         waveforms = [item["waveform"] for item in batch]
@@ -239,10 +243,11 @@ def transcribe_chunks_in_memory(
             return_hypotheses=True,
         )
 
-        merged_words.extend(_merge_hypotheses(outputs, offsets))
+        for item, hyp, offset_s in zip(batch, outputs, offsets):
+            chunk_word_lists.append(_merge_hypotheses([hyp], [offset_s]))
+            chunk_spans.append((float(item["start_s"]), float(item["end_s"])))
 
-    merged_words = dedup_overlaps(sort_words(merged_words))
-    return merged_words
+    return reconcile_chunk_words(chunk_word_lists, chunk_spans)
 
 
 def transcribe_chunks_with_model_mode(
@@ -263,7 +268,8 @@ def transcribe_chunks_with_model_mode(
     if not chunks:
         return {"words": [], "segments": [], "text": ""}
 
-    words: list[dict] = []
+    chunk_word_lists: list[list[dict]] = []
+    chunk_spans: list[tuple[float, float]] = []
     segments: list[dict] = []
     texts = []
     use_timestamps = timestamps != "none"
@@ -283,12 +289,17 @@ def transcribe_chunks_with_model_mode(
         )
         texts.append(_merge_texts(outputs, offsets))
         if timestamps == "word":
-            words.extend(_merge_hypotheses(outputs, offsets))
+            for (path, _), hyp, offset_s in zip(batch, outputs, offsets):
+                meta = build_chunk_meta(path.name, pad_left_s, pad_right_s)
+                chunk_word_lists.append(_merge_hypotheses([hyp], [offset_s]))
+                chunk_spans.append((meta.orig_start_s, meta.orig_end_s))
         elif timestamps == "segment":
             segments.extend(_merge_segments(outputs, offsets))
 
     if timestamps == "word":
-        words = dedup_overlaps(sort_words(words))
+        words = reconcile_chunk_words(chunk_word_lists, chunk_spans)
+    else:
+        words = []
     text = _merge_text_fragments(texts)
     return {"words": words, "segments": segments, "text": text}
 
@@ -305,7 +316,8 @@ def transcribe_chunks_in_memory_mode(
     if not chunks:
         return {"words": [], "segments": [], "text": ""}
 
-    words: list[dict] = []
+    chunk_word_lists: list[list[dict]] = []
+    chunk_spans: list[tuple[float, float]] = []
     segments: list[dict] = []
     texts = []
     use_timestamps = timestamps != "none"
@@ -325,12 +337,16 @@ def transcribe_chunks_in_memory_mode(
         )
         texts.append(_merge_texts(outputs, offsets))
         if timestamps == "word":
-            words.extend(_merge_hypotheses(outputs, offsets))
+            for item, hyp, offset_s in zip(batch, outputs, offsets):
+                chunk_word_lists.append(_merge_hypotheses([hyp], [offset_s]))
+                chunk_spans.append((float(item["start_s"]), float(item["end_s"])))
         elif timestamps == "segment":
             segments.extend(_merge_segments(outputs, offsets))
 
     if timestamps == "word":
-        words = dedup_overlaps(sort_words(words))
+        words = reconcile_chunk_words(chunk_word_lists, chunk_spans)
+    else:
+        words = []
     text = _merge_text_fragments(texts)
     return {"words": words, "segments": segments, "text": text}
 

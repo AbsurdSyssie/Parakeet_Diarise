@@ -1,0 +1,90 @@
+[
+  {
+    "audio": "Examples/MoreOrLess.wav",
+    "duration_s": 9.993,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": false,
+    "load_s": 1.147,
+    "inference_s": 0.254,
+    "realtime_factor": 0.025,
+    "segments": 1,
+    "probability_shape": [
+      125,
+      4
+    ],
+    "mean_activity": [
+      0.9575,
+      0.0048,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 2120.1
+  },
+  {
+    "audio": "Examples/MoreOrLess.wav",
+    "duration_s": 9.993,
+    "backend": "streaming",
+    "model": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+    "postprocessing": true,
+    "load_s": 1.147,
+    "inference_s": 0.179,
+    "realtime_factor": 0.018,
+    "segments": 1,
+    "probability_shape": [
+      125,
+      4
+    ],
+    "mean_activity": [
+      0.9575,
+      0.0048,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 2120.9
+  },
+  {
+    "audio": "Examples/MoreOrLess.wav",
+    "duration_s": 9.993,
+    "backend": "offline",
+    "model": "nvidia/diar_sortformer_4spk-v1",
+    "postprocessing": false,
+    "load_s": 0.984,
+    "inference_s": 0.205,
+    "realtime_factor": 0.021,
+    "segments": 1,
+    "probability_shape": [
+      125,
+      4
+    ],
+    "mean_activity": [
+      0.971,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 2180.8
+  },
+  {
+    "audio": "Examples/MoreOrLess.wav",
+    "duration_s": 9.993,
+    "backend": "offline",
+    "model": "nvidia/diar_sortformer_4spk-v1",
+    "postprocessing": true,
+    "load_s": 0.984,
+    "inference_s": 0.183,
+    "realtime_factor": 0.018,
+    "segments": 1,
+    "probability_shape": [
+      125,
+      4
+    ],
+    "mean_activity": [
+      0.971,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_rss_mb": 2180.8
+  }
+]
