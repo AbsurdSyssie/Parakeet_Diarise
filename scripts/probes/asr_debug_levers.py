@@ -26,12 +26,18 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Dict, Any, List, Tuple
 
 import requests
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-DEFAULT_URL = "http://localhost:8000/v1/audio/transcriptions"
+from settings import SETTINGS
+
+DEFAULT_URL = f"http://localhost:{SETTINGS.api_port}/v1/audio/transcriptions"
 DEFAULT_OUT_DIR = "tmp/probes/asr_debug_levers"
 
 
