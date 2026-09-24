@@ -7,7 +7,7 @@ import sys
 
 import torch
 
-from asr_backend import ASRConfig, load_asr_backend, resolve_asr_model
+from asr import ASRConfig, load_asr_backend, resolve_asr_model
 from chunk_transcribe import _patch_transcribe_dataloader_no_lhotse
 
 
