@@ -42,6 +42,14 @@ docker compose up api
 
 The API listens on `http://localhost:8000`.
 
+For live source mounts during development:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build api
+```
+
+The normal `compose.yaml` runs the code baked into the image; the development override mounts the checkout into `/app`.
+
 ## Transcribe audio
 
 ```bash
@@ -198,7 +206,7 @@ python transcribe_parakeet.py audio.wav \
 
 ## Tests
 
-Tests live in `test/`.
+Automated tests live in `tests/`. Manual diagnostics live in `scripts/probes/`.
 
 See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks.
 
@@ -216,10 +224,14 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 | `vad_chunk.py` | VAD and chunk generation |
 | `diarize_align.py` | Speaker-to-word alignment |
 | `diarize_api.py` | Optional standalone diarization API |
-| `docs/` | API, model, tracing, and test documentation |
-| `test/` | Unit tests and dry-run tools |
+| `scripts/` | CLI utilities and manual probes |
+| `tests/` | Automated unit tests |
+| `docs/` | Current API, architecture, model, and test documentation |
+| `docs/archive/` | Historical implementation notes and progress logs |
+| `legacy/` | Unsupported executable experiments kept for reference |
 | `Dockerfile` | CUDA/Python runtime |
-| `compose.yaml` | Main API service |
+| `compose.yaml` | Built-image runtime service |
+| `compose.dev.yaml` | Development bind-mount override |
 
 ## Further reading
 
@@ -231,4 +243,4 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 - [Tests](docs/tests.md)
 - [Architecture](docs/architecture.md)
 
-Historical experiment notes remain under `docs/`; unsupported executable experiments live under `legacy/`.
+Historical implementation notes live under `docs/archive/`; unsupported executable experiments live under `legacy/`.
