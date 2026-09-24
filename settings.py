@@ -47,6 +47,7 @@ class AppSettings:
     asr_chunk_length_s: int | None
     asr_stride_length_s: int | None
     asr_attention_implementation: str | None
+    diarization_model: str
     vad_sample_rate: int
     disable_cuda_graphs: bool
 
@@ -68,6 +69,10 @@ class AppSettings:
             asr_stride_length_s=optional_env_int("ASR_STRIDE_LENGTH_S"),
             asr_attention_implementation=(
                 os.getenv("ASR_ATTENTION_IMPLEMENTATION", "").strip() or None
+            ),
+            diarization_model=(
+                os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip()
+                or "nvidia/Nemotron-3-Diarization"
             ),
             vad_sample_rate=env_int("VAD_SAMPLE_RATE", "16000"),
             disable_cuda_graphs=env_bool("DISABLE_CUDA_GRAPHS", "0"),
