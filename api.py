@@ -30,6 +30,12 @@ from chunk_transcribe import (
     transcribe_chunks_in_memory_mode,
     transcribe_chunks_with_model_mode,
 )
+from diarization import (
+    DIARIZATION_MODEL,
+    diarize_waveform,
+    is_diarizer_loaded,
+    unload_diarizer,
+)
 from diarize_align import assign_speakers, group_words_into_segments
 from vad_chunk import run_vad_chunks_from_waveform, run_vad_chunks_in_memory_from_waveform
 
@@ -38,7 +44,6 @@ load_dotenv()
 app = FastAPI()
 _MODEL_LOCK = threading.RLock()
 _ASR_MODEL = None
-_DIAR_MODEL = None
 _ACTIVE_CONFIG: ASRConfig | None = None
 
 
@@ -97,10 +102,6 @@ ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
 ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
 ASR_ATTENTION_IMPLEMENTATION = os.getenv("ASR_ATTENTION_IMPLEMENTATION", "").strip() or None
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
-DIARIZATION_MODEL = (
-    os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip()
-    or "nvidia/Nemotron-3-Diarization"
-)
 
 MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
     "parakeet-0.6b": ModelRegistryEntry(
@@ -427,17 +428,14 @@ def _load_model_from_config(config: ASRConfig, *, warmup: bool = False):
 
 
 def _unload_models(*, unload_diarization: bool = False) -> None:
-    global _ASR_MODEL, _DIAR_MODEL
+    global _ASR_MODEL
     old_asr = _ASR_MODEL
     _ASR_MODEL = None
     if old_asr is not None:
         del old_asr
 
     if unload_diarization:
-        old_diar = _DIAR_MODEL
-        _DIAR_MODEL = None
-        if old_diar is not None:
-            del old_diar
+        unload_diarizer()
 
     _cleanup_cuda()
 
@@ -681,7 +679,7 @@ def health():
         "available_models_count": len(MODEL_REGISTRY),
         "hf_token_configured": bool(HF_TOKEN),
         "diarization_model": DIARIZATION_MODEL,
-        "diarization_loaded": _DIAR_MODEL is not None,
+        "diarization_loaded": is_diarizer_loaded(),
         "cuda_available": torch.cuda.is_available(),
         "cuda_mem": cuda_mem(),
     }
@@ -771,80 +769,6 @@ def _startup_load_model() -> None:
             )
             raise
 
-
-def _get_diar_model():
-    global _DIAR_MODEL
-    if _DIAR_MODEL is not None:
-        return _DIAR_MODEL
-
-    from nemo.collections.asr.models import SortformerEncLabelModel
-
-    print(f"Loading diarization model: {DIARIZATION_MODEL}")
-    model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
-    model.eval()
-    if torch.cuda.is_available():
-        model.to(torch.device("cuda"))
-
-    model.sortformer_modules.chunk_len = 340
-    model.sortformer_modules.chunk_right_context = 40
-    model.sortformer_modules.fifo_len = 40
-    model.sortformer_modules.spkcache_update_period = 300
-    if hasattr(model, "_check_streaming_parameters"):
-        model._check_streaming_parameters()
-
-    _DIAR_MODEL = model
-    return model
-
-
-def _normalize_speaker(label: Any) -> str:
-    if isinstance(label, int):
-        return f"SPEAKER_{label:02d}"
-    if not isinstance(label, str):
-        return "UNKNOWN"
-
-    label = label.strip()
-    if label.isdigit():
-        return f"SPEAKER_{int(label):02d}"
-    if label.startswith("SPEAKER_"):
-        return label
-    if label.startswith("speaker_"):
-        try:
-            idx = int(label.split("_", 1)[1])
-            return f"SPEAKER_{idx:02d}"
-        except (ValueError, IndexError):
-            return label
-    return label
-
-
-def _run_diarization(waveform: torch.Tensor, sr: int, tmpdir: Path) -> list[dict]:
-    model = _get_diar_model()
-    wav = waveform.unsqueeze(0) if waveform.dim() == 1 else waveform
-    mono_path = tmpdir / "diarize_mono16k.wav"
-    torchaudio.save(str(mono_path), wav, sr)
-    predicted_segments = model.diarize(audio=[str(mono_path)], batch_size=1)
-    raw = predicted_segments[0] if predicted_segments else []
-    turns = []
-    for seg in raw:
-        if isinstance(seg, dict):
-            start = float(seg.get("start", seg.get("start_time", 0.0)))
-            end = float(seg.get("end", seg.get("end_time", 0.0)))
-            speaker = seg.get("speaker", seg.get("speaker_label", seg.get("label", "UNKNOWN")))
-        elif isinstance(seg, str):
-            parts = seg.strip().split()
-            if len(parts) < 3:
-                continue
-            start = float(parts[0])
-            end = float(parts[1])
-            speaker = parts[2]
-        elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
-            start = float(seg[0])
-            end = float(seg[1])
-            speaker = seg[2]
-        else:
-            continue
-        turns.append({"start": start, "end": end, "speaker": _normalize_speaker(speaker)})
-    turns.sort(key=lambda t: (t["start"], t["end"]))
-    return turns
 
 
 def _build_vad_params(
@@ -1140,7 +1064,7 @@ async def transcribe(
 
         if diarization:
             start_diar = time.perf_counter()
-            turns = _run_diarization(waveform, sr, Path(tmpdir))
+            turns = diarize_waveform(waveform, sr, Path(tmpdir))
             diar_elapsed = time.perf_counter() - start_diar
             print(f"diarization in {diar_elapsed:.2f}s")
             words_with_speaker = assign_speakers(words, turns)
