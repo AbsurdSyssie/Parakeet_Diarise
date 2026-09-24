@@ -33,14 +33,28 @@ Add a Hugging Face token if the model you use requires one:
 HF_TOKEN=...
 ```
 
+Choose the server port and startup models in `.env`:
+
+```env
+API_PORT=8000
+ASR_BACKEND=nemo
+ASR_MODEL=parakeet-1.1b
+DIARIZATION_MODEL=nvidia/Nemotron-3-Diarization
+```
+
 Build and start the API:
 
 ```bash
-docker compose build api
-docker compose up api
+docker compose up --build api
 ```
 
-The API listens on `http://localhost:8000`.
+The API listens on `http://localhost:$API_PORT` (port `8000` by default). Compose uses the same port inside and outside the container.
+
+For a one-off override without editing `.env`:
+
+```bash
+API_PORT=9000 ASR_MODEL=parakeet-0.6b docker compose up --build api
+```
 
 For live source mounts during development:
 
@@ -49,6 +63,15 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build api
 ```
 
 The normal `compose.yaml` runs the code baked into the image; the development override mounts the checkout into `/app`.
+
+To run the API without Docker, the launcher reads the same `.env`:
+
+```bash
+python scripts/run_api.py
+python scripts/run_api.py --port 9000
+```
+
+`transcribe_parakeet.py` runs models directly and does not use an HTTP port.
 
 ## Transcribe audio
 
@@ -156,6 +179,7 @@ The main settings are:
 
 | Variable | Purpose |
 | --- | --- |
+| `API_PORT` | API listener and Docker-published port (default `8000`) |
 | `ASR_BACKEND` | ASR backend used at startup |
 | `ASR_MODEL` | ASR model or registry key used at startup |
 | `DIARIZATION_MODEL` | NeMo diarization checkpoint |
@@ -224,7 +248,7 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 | `vad_chunk.py` | VAD and chunk generation |
 | `diarize_align.py` | Speaker-to-word alignment |
 | `diarize_api.py` | Optional standalone diarization API |
-| `scripts/` | CLI utilities and manual probes |
+| `scripts/` | API launcher, CLI utilities, and manual probes |
 | `tests/` | Automated unit tests |
 | `docs/` | Current API, architecture, model, and test documentation |
 | `docs/archive/` | Historical implementation notes and progress logs |
