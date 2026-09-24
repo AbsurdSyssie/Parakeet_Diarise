@@ -9,3 +9,5 @@ These scripts are diagnostic tools, not automated tests. Run them from the repos
 - `parakeet_clip.py`: inspect Parakeet timestamps on a short clip
 
 Scratch output defaults to `tmp/probes/`, which is git-ignored.
+
+API-facing probes default to `http://localhost:$API_PORT`, loading `API_PORT` from the repository `.env`. Their explicit `--endpoint` or `--url` options still override that default where available.
