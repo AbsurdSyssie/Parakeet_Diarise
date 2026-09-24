@@ -1,6 +1,6 @@
 # Parakeet + Diarise
 
-ASR + diarization service built around Parakeet transcription and Sortformer diarization. The API exposes an OpenAI-style `/v1/audio/transcriptions` endpoint with optional diarization. Runtime-selectable ASR adapters include Parakeet, Whisper, faster-whisper, Cohere Transcribe, and IBM Granite Speech.
+ASR + diarization service built around runtime-selectable transcription backends and NeMo Sortformer diarization, with NVIDIA Nemotron 3 Diarization as the default. The API exposes an OpenAI-style `/v1/audio/transcriptions` endpoint with optional diarization. Runtime-selectable ASR adapters include Parakeet, Whisper, faster-whisper, Cohere Transcribe, and IBM Granite Speech.
 
 ## Quick start
 
@@ -131,7 +131,8 @@ Use `.env.example` as the template. Common settings:
 - `ASR_TRUST_REMOTE_CODE`
 - `ASR_RETURN_TIMESTAMPS`
 - `ASR_ATTENTION_IMPLEMENTATION` (`sdpa`, `eager`, or optional `flash_attention_2`)
-- `HF_TOKEN` (required for diarization downloads)
+- `HF_TOKEN` (required when the selected diarization model needs authenticated Hugging Face access)
+- `DIARIZATION_MODEL` (default `nvidia/Nemotron-3-Diarization`; legacy fallback `nvidia/diar_streaming_sortformer_4spk-v2.1`)
 - `DIARIZE_URL` (external diarize service URL if used)
 - `DIARIZE_EMPTY_CACHE` (1 to `gc.collect()` + reset CUDA stats after diarize)
 - `DIARIZE_TF32` (1 to enable TF32 in CUDA matmul/cudnn)
