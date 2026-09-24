@@ -3,83 +3,15 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any
 
-from asr import ASRConfig, resolve_asr_model
+from asr.registry import MODEL_REGISTRY, ModelSpec, resolve_asr_model
+from asr.types import ASRConfig
 from settings import AppSettings, SETTINGS
 
 
-@dataclass(frozen=True)
-class ModelRegistryEntry:
-    id: str
-    backend: str
-    model_name: str
-    description: str
-    language: str = "en"
-    task: str = "transcribe"
-    trust_remote_code: bool = False
-    return_timestamps: bool = False
-    chunk_length_s: int | None = None
-    stride_length_s: int | tuple[int, int] | None = None
-    supports_word_timestamps: bool = True
-    supports_segment_timestamps: bool = True
-    supports_diarization: bool = True
-    selectable: bool = True
-
-
-MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
-    "parakeet-0.6b": ModelRegistryEntry(
-        id="parakeet-0.6b",
-        backend="nemo",
-        model_name="nvidia/parakeet-tdt-0.6b-v3",
-        description="NVIDIA Parakeet TDT 0.6B v3 via NeMo",
-    ),
-    "parakeet-1.1b": ModelRegistryEntry(
-        id="parakeet-1.1b",
-        backend="nemo",
-        model_name="nvidia/parakeet-tdt-1.1b",
-        description="NVIDIA Parakeet TDT 1.1B via NeMo",
-    ),
-    "nemotron-3.5-asr-streaming-0.6b": ModelRegistryEntry(
-        id="nemotron-3.5-asr-streaming-0.6b",
-        backend="nemo",
-        model_name="nvidia/nemotron-3.5-asr-streaming-0.6b",
-        description="NVIDIA Nemotron 3.5 ASR Streaming 0.6B via NeMo",
-    ),
-    "medical-whisper-large-v3": ModelRegistryEntry(
-        id="medical-whisper-large-v3",
-        backend="whisper",
-        model_name="Na0s/Medical-Whisper-Large-v3",
-        description="Medical Whisper Large v3 via Transformers pipeline",
-    ),
-    "faster-whisper-large-v3": ModelRegistryEntry(
-        id="faster-whisper-large-v3",
-        backend="faster-whisper",
-        model_name="Systran/faster-whisper-large-v3",
-        description="SYSTRAN faster-whisper Large v3 via CTranslate2",
-    ),
-    "cohere-transcribe-03-2026": ModelRegistryEntry(
-        id="cohere-transcribe-03-2026",
-        backend="transformers-asr",
-        model_name="CohereLabs/cohere-transcribe-03-2026",
-        description="Cohere Transcribe via Transformers custom ASR backend",
-        trust_remote_code=SETTINGS.asr_trust_remote_code,
-        supports_word_timestamps=False,
-        supports_segment_timestamps=False,
-        supports_diarization=False,
-    ),
-    "granite-speech-4.1-2b-nar": ModelRegistryEntry(
-        id="granite-speech-4.1-2b-nar",
-        backend="transformers-asr",
-        model_name="ibm-granite/granite-speech-4.1-2b-nar",
-        description="IBM Granite Speech 4.1 2B NAR via Transformers custom model",
-        trust_remote_code=True,
-        supports_word_timestamps=False,
-        supports_segment_timestamps=False,
-        supports_diarization=False,
-    ),
-}
+ModelRegistryEntry = ModelSpec
 
 
 def default_model_key_for_backend(backend: str) -> str:
