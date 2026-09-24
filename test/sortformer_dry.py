@@ -1,19 +1,17 @@
 import argparse
 import json
-import os
+import tempfile
 from pathlib import Path
 
 import torch
 import torchaudio
 import soundfile as sf
-from nemo.collections.asr.models import SortformerEncLabelModel
+from diarization import diarize_waveform
 
 
 DEFAULT_AUDIO = "Examples/MoreOrLessFull.wav"
 DEFAULT_OUT = "Output/sortformer_segments.json"
 FALLBACK_OUT = "test/tmp/sortformer_segments.json"
-DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
-
 
 def load_audio(path: Path, target_sr: int = 16000) -> torch.Tensor:
     try:
@@ -28,27 +26,9 @@ def load_audio(path: Path, target_sr: int = 16000) -> torch.Tensor:
     return waveform
 
 
-def normalize_segments(raw_segments):
-    segments = []
-    for seg in raw_segments:
-        if isinstance(seg, dict):
-            start = float(seg.get("start", seg.get("start_time", 0.0)))
-            end = float(seg.get("end", seg.get("end_time", 0.0)))
-            speaker = seg.get("speaker", seg.get("speaker_label", seg.get("label", "UNKNOWN")))
-        elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
-            start = float(seg[0])
-            end = float(seg[1])
-            speaker = seg[2]
-        else:
-            # Fallback: keep raw representation
-            segments.append({"raw": seg})
-            continue
-        segments.append({"start": start, "end": end, "speaker": speaker})
-    return segments
-
 
 def main():
-    parser = argparse.ArgumentParser(description="Dry-run Sortformer diarization on a local audio file.")
+    parser = argparse.ArgumentParser(description="Dry-run speaker diarization on a local audio file.")
     parser.add_argument("--audio", default=DEFAULT_AUDIO, help="Path to audio file (WAV recommended).")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Path to write JSON diarization segments.")
     args = parser.parse_args()
@@ -57,22 +37,9 @@ def main():
     if not audio_path.exists():
         raise SystemExit(f"Audio not found: {audio_path}")
 
-    audio_input = [str(audio_path)]
-
-    diar_model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
-    diar_model.eval()
-
-    # Streaming params from docs/sortformer.md quick-start defaults
-    diar_model.sortformer_modules.chunk_len = 340
-    diar_model.sortformer_modules.chunk_right_context = 40
-    diar_model.sortformer_modules.fifo_len = 40
-    diar_model.sortformer_modules.spkcache_update_period = 300
-    if hasattr(diar_model, "_check_streaming_parameters"):
-        diar_model._check_streaming_parameters()
-
-    predicted_segments = diar_model.diarize(audio=audio_input, batch_size=1)
-    raw = predicted_segments[0] if predicted_segments else []
-    segments = normalize_segments(raw)
+    waveform = load_audio(audio_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        segments = diarize_waveform(waveform, 16000, Path(tmpdir))
 
     out_path = Path(args.out)
     try:
