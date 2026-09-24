@@ -17,7 +17,10 @@ from nemo.collections.asr.models import SortformerEncLabelModel
 
 app = FastAPI()
 
-DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
+DIARIZATION_MODEL = (
+    os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip()
+    or "nvidia/Nemotron-3-Diarization"
+)
 _MODEL = None
 
 
