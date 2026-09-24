@@ -8,57 +8,15 @@ import requests
 import torch
 import torchaudio
 import soundfile as sf
-from nemo.collections.asr.models import SortformerEncLabelModel
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+from diarization import diarize_waveform
 from diarize_align import assign_speakers, group_words_into_segments
 
 
 DEFAULT_AUDIO = "Examples/MoreOrLess.wav"
 DEFAULT_OUT_DIR = "test/tmp/sortformer_align"
 ASR_URL = "http://localhost:8000/v1/audio/transcriptions"
-DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
-
-
-def normalize_speaker(label: str) -> str:
-    if not isinstance(label, str):
-        return "UNKNOWN"
-    if label.startswith("SPEAKER_"):
-        return label
-    if label.startswith("speaker_"):
-        try:
-            idx = int(label.split("_", 1)[1])
-            return f"SPEAKER_{idx:02d}"
-        except (ValueError, IndexError):
-            return label
-    return label
-
-
-def normalize_segments(raw_segments):
-    segments = []
-    for seg in raw_segments:
-        if isinstance(seg, dict):
-            start = float(seg.get("start", seg.get("start_time", 0.0)))
-            end = float(seg.get("end", seg.get("end_time", 0.0)))
-            speaker = seg.get("speaker", seg.get("speaker_label", seg.get("label", "UNKNOWN")))
-        elif isinstance(seg, str):
-            parts = seg.strip().split()
-            if len(parts) >= 3:
-                start = float(parts[0])
-                end = float(parts[1])
-                speaker = parts[2]
-            else:
-                segments.append({"raw": seg})
-                continue
-        elif isinstance(seg, (list, tuple)) and len(seg) >= 3:
-            start = float(seg[0])
-            end = float(seg[1])
-            speaker = seg[2]
-        else:
-            segments.append({"raw": seg})
-            continue
-        segments.append({"start": start, "end": end, "speaker": normalize_speaker(speaker)})
-    return segments
 
 
 def run_asr(audio_path: Path):
@@ -96,37 +54,13 @@ def pick_tmp_dir(out_dir: Path) -> Path:
     return out_dir
 
 
-def run_sortformer(audio_path: Path, tmp_dir: Path):
-    diar_model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
-    diar_model.eval()
-    diar_model.sortformer_modules.chunk_len = 340
-    diar_model.sortformer_modules.chunk_right_context = 40
-    diar_model.sortformer_modules.fifo_len = 40
-    diar_model.sortformer_modules.spkcache_update_period = 300
-    if hasattr(diar_model, "_check_streaming_parameters"):
-        diar_model._check_streaming_parameters()
-
+def run_diarization(audio_path: Path, tmp_dir: Path):
     waveform = load_audio_mono_16k(audio_path)
-    audio_np = waveform.squeeze(0).numpy().astype("float32")
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = tmp_dir / f"{audio_path.stem}.mono16k.wav"
-    sf.write(str(tmp_path), audio_np, 16000)
-    try:
-        predicted_segments = diar_model.diarize(audio=[str(tmp_path)], batch_size=1)
-    finally:
-        try:
-            tmp_path.unlink()
-        except FileNotFoundError:
-            pass
-    raw = predicted_segments[0] if predicted_segments else []
-    turns = normalize_segments(raw)
-    turns = [t for t in turns if "start" in t and "end" in t]
-    turns.sort(key=lambda t: (float(t["start"]), float(t["end"])))
-    return turns
+    return diarize_waveform(waveform, 16000, tmp_dir)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dry-run ASR + Sortformer diarization + alignment.")
+    parser = argparse.ArgumentParser(description="Dry-run ASR + speaker diarization + alignment.")
     parser.add_argument("--audio", default=DEFAULT_AUDIO, help="Path to audio file.")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="Output directory for JSON artifacts.")
     args = parser.parse_args()
@@ -141,13 +75,13 @@ def main():
     asr = run_asr(audio_path)
     words = asr.get("words", [])
     tmp_dir = pick_tmp_dir(out_dir)
-    turns = run_sortformer(audio_path, tmp_dir)
+    turns = run_diarization(audio_path, tmp_dir)
 
     words_with_speaker = assign_speakers(words, turns, max_gap_s=0.5)
     segments = group_words_into_segments(words_with_speaker)
 
     (out_dir / "asr_words.json").write_text(json.dumps(words, indent=2))
-    (out_dir / "sortformer_turns.json").write_text(json.dumps(turns, indent=2))
+    (out_dir / "diarization_turns.json").write_text(json.dumps(turns, indent=2))
     (out_dir / "aligned_words.json").write_text(json.dumps(words_with_speaker, indent=2))
     (out_dir / "aligned_segments.json").write_text(json.dumps(segments, indent=2))
 
