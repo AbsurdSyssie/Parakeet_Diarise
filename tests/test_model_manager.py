@@ -12,6 +12,7 @@ from settings import AppSettings
 
 def settings():
     return AppSettings(
+        api_port=8000,
         hf_token=None,
         asr_backend="nemo",
         asr_model="",
