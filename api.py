@@ -23,7 +23,7 @@ import torch
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 
 from api_response import build_response
-from asr_backend import ASRConfig, load_asr_backend, resolve_asr_model
+from asr import ASRConfig, load_asr_backend, resolve_asr_model
 from asr_merge import parse_chunk_filename
 from chunk_transcribe import (
     _patch_transcribe_dataloader_no_lhotse,
