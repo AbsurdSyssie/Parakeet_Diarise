@@ -36,4 +36,4 @@ RUN python3.12 -m pip install --upgrade \
 
 COPY . /app
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn api:app --host 0.0.0.0 --port ${API_PORT:-8000}"]
