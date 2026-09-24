@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import nemo.collections.asr as nemo_asr
-
 from .types import ASRConfig
 
 
 def load_nemo_asr_model(config: ASRConfig):
+    import nemo.collections.asr as nemo_asr
+
     kwargs = {"model_name": config.model_name}
     if config.hf_token:
         kwargs["use_auth_token"] = config.hf_token
