@@ -111,7 +111,7 @@ def config_from_entry(
         hf_token=settings.hf_token,
         language=(language or entry.language or settings.asr_language),
         task=entry.task or settings.asr_task,
-        trust_remote_code=entry.trust_remote_code,
+        trust_remote_code=(entry.trust_remote_code or settings.asr_trust_remote_code),
         return_timestamps=requested_timestamps,
         chunk_length_s=entry.chunk_length_s,
         stride_length_s=entry.stride_length_s,
