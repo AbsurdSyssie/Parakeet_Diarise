@@ -226,4 +226,4 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 - [Audio tracing](docs/trace_audio.md)
 - [Tests](docs/tests.md)
 
-Historical experiment notes and progress logs remain under `docs/`.
+Historical experiment notes remain under `docs/`; unsupported executable experiments live under `legacy/`.
