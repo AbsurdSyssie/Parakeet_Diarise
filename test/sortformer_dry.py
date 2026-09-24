@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -11,6 +12,7 @@ from nemo.collections.asr.models import SortformerEncLabelModel
 DEFAULT_AUDIO = "Examples/MoreOrLessFull.wav"
 DEFAULT_OUT = "Output/sortformer_segments.json"
 FALLBACK_OUT = "test/tmp/sortformer_segments.json"
+DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
 
 
 def load_audio(path: Path, target_sr: int = 16000) -> torch.Tensor:
@@ -57,7 +59,7 @@ def main():
 
     audio_input = [str(audio_path)]
 
-    diar_model = SortformerEncLabelModel.from_pretrained("nvidia/diar_streaming_sortformer_4spk-v2.1")
+    diar_model = SortformerEncLabelModel.from_pretrained(DIARIZATION_MODEL)
     diar_model.eval()
 
     # Streaming params from docs/sortformer.md quick-start defaults
@@ -65,6 +67,8 @@ def main():
     diar_model.sortformer_modules.chunk_right_context = 40
     diar_model.sortformer_modules.fifo_len = 40
     diar_model.sortformer_modules.spkcache_update_period = 300
+    if hasattr(diar_model, "_check_streaming_parameters"):
+        diar_model._check_streaming_parameters()
 
     predicted_segments = diar_model.diarize(audio=audio_input, batch_size=1)
     raw = predicted_segments[0] if predicted_segments else []
