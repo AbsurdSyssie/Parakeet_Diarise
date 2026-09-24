@@ -7,6 +7,8 @@ from .nemo import load_nemo_asr_model
 from .nemotron import NemotronASRBackend
 from .registry import (
     FASTER_WHISPER_MODEL_ALIASES,
+    MODEL_REGISTRY,
+    ModelSpec,
     NEMO_MODEL_ALIASES,
     TRANSFORMERS_ASR_MODEL_ALIASES,
     WHISPER_MODEL_ALIASES,
@@ -19,6 +21,8 @@ from .whisper import WhisperASRBackend
 __all__ = [
     "ASRConfig",
     "SimpleHypothesis",
+    "ModelSpec",
+    "MODEL_REGISTRY",
     "NEMO_MODEL_ALIASES",
     "WHISPER_MODEL_ALIASES",
     "FASTER_WHISPER_MODEL_ALIASES",
