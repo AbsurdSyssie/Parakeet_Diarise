@@ -5,7 +5,7 @@ This repo exposes an OpenAI-style transcription endpoint with optional diarizati
 ## Services
 
 - ASR API: `http://localhost:8000`
-- Diarization runs in-process inside the ASR API via Sortformer when `diarization=true`.
+- Diarization runs in-process inside the ASR API through NeMo `SortformerEncLabelModel` when `diarization=true`. The default model is `nvidia/Nemotron-3-Diarization`.
 
 ## Build + run
 
@@ -207,7 +207,8 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 
 ## Notes
 
-- `.env` must contain `HF_TOKEN` for diarization. Use `.env.example` as a template.
+- Set `DIARIZATION_MODEL` to override the default `nvidia/Nemotron-3-Diarization`. The previous `nvidia/diar_streaming_sortformer_4spk-v2.1` model remains usable as a fallback.
+- Configure `HF_TOKEN` when the selected Hugging Face model requires authenticated access. Use `.env.example` as a template.
 - Current default VAD tuning: threshold 0.38, target_max 20s, hard_max 30s, overlap 1.0s, merge_gap 200ms, speech_pad 0ms.
 - VAD chunking uses 0ms padding by default.
 - Default `chunk_mode=memory` avoids writing WAVs to disk, reduces decode/IO overhead, and keeps GPU utilization higher.
@@ -215,7 +216,7 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 - `diarization=true` requires `timestamps=word` because speaker alignment uses word-level timestamps.
 - In-memory chunking is the default for the API; file-based chunking is still available via `chunk_mode=file`.
 - Short `UNKNOWN` speaker segments (<=0.6s or <=2 words) are merged into neighboring segments; if the same speaker appears on both sides, the segments are coalesced.
-- Local Sortformer experiments live in `test/sortformer_dry.py` and `test/sortformer_align_dry.py`.
+- Local diarization experiments live in `test/sortformer_dry.py` and `test/sortformer_align_dry.py`; both honor `DIARIZATION_MODEL`.
 - `VAD_DEVICE` can force VAD to CPU or CUDA.
 - `VAD_SAMPLE_RATE` lets you run VAD at 8 kHz while keeping ASR at 16 kHz. Timestamps remain in seconds.
 - `VAD_ENERGY_GATE=1` enables a cheap RMS energy gate before Silero. It scans 100 ms frames on CPU and only runs Silero on candidate regions. Tunables: `VAD_ENERGY_DB` (default `-35`), `VAD_ENERGY_FRAME_MS` (default `100`), `VAD_ENERGY_MIN_ACTIVE_MS` (default `500`), `VAD_ENERGY_MERGE_GAP_MS` (default `800`).
