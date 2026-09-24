@@ -97,7 +97,10 @@ ASR_CHUNK_LENGTH_S = _get_optional_env_int("ASR_CHUNK_LENGTH_S")
 ASR_STRIDE_LENGTH_S = _get_optional_env_int("ASR_STRIDE_LENGTH_S")
 ASR_ATTENTION_IMPLEMENTATION = os.getenv("ASR_ATTENTION_IMPLEMENTATION", "").strip() or None
 VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
-DIARIZATION_MODEL = os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip() or "nvidia/Nemotron-3-Diarization"
+DIARIZATION_MODEL = (
+    os.getenv("DIARIZATION_MODEL", "nvidia/Nemotron-3-Diarization").strip()
+    or "nvidia/Nemotron-3-Diarization"
+)
 
 MODEL_REGISTRY: dict[str, ModelRegistryEntry] = {
     "parakeet-0.6b": ModelRegistryEntry(
