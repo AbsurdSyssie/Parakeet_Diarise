@@ -260,7 +260,7 @@ class TestGraniteASRBackend(unittest.TestCase):
         import numpy as np
 
         with (
-            patch("asr_backend.torchaudio.load", side_effect=ImportError("TorchCodec is required")),
+            patch("asr.granite.torchaudio.load", side_effect=ImportError("TorchCodec is required")),
             patch("soundfile.read", return_value=(np.ones((4, 2), dtype=np.float32), 16000)),
         ):
             result = self.backend._prepare_audio("example.mp3")
