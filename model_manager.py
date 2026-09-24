@@ -154,6 +154,7 @@ class ASRModelManager:
     def _unload_unlocked(self, *, unload_diarization: bool) -> None:
         old_asr = self.model
         self.model = None
+        self.active_config = None
         if old_asr is not None:
             del old_asr
 
