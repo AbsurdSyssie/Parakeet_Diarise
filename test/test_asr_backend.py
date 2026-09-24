@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from asr_backend import (
+from asr import (
     ASRConfig,
     GraniteASRBackend,
     SimpleHypothesis,
