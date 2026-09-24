@@ -75,3 +75,10 @@ There are two long-lived model owners:
 - `diarization.py` owns diarization state.
 
 The API reads those owners; it does not maintain duplicate model globals.
+
+## Repository support directories
+
+- `tests/`: automated unit tests
+- `scripts/probes/`: manual diagnostics and performance investigations
+- `docs/archive/`: historical engineering notes, not current behaviour
+- `legacy/`: unsupported executable experiments retained for reference
