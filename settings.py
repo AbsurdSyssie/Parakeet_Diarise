@@ -37,6 +37,7 @@ def optional_env_int(name: str) -> int | None:
 
 @dataclass(frozen=True)
 class AppSettings:
+    api_port: int
     hf_token: str | None
     asr_backend: str
     asr_model: str
@@ -54,6 +55,7 @@ class AppSettings:
     @classmethod
     def from_env(cls) -> "AppSettings":
         return cls(
+            api_port=env_int("API_PORT", "8000"),
             hf_token=(
                 os.getenv("HF_TOKEN")
                 or os.getenv("HUGGINGFACE_TOKEN")
