@@ -11,11 +11,9 @@ from typing import Any
 import torch
 import torchaudio
 
-DEFAULT_DIARIZATION_MODEL = "nvidia/Nemotron-3-Diarization"
-DIARIZATION_MODEL = (
-    os.getenv("DIARIZATION_MODEL", DEFAULT_DIARIZATION_MODEL).strip()
-    or DEFAULT_DIARIZATION_MODEL
-)
+from settings import SETTINGS
+
+DIARIZATION_MODEL = SETTINGS.diarization_model
 
 _MODEL = None
 _MODEL_LOCK = threading.RLock()
