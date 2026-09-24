@@ -8,9 +8,12 @@ These are the tests that already exist in `test/` and what they validate:
 - `test/test_api_response.py`: Verifies `api_response.build_response` output shape, text override, and speaker list extraction.
 - `test/test_chunk_transcribe.py`: Validates `_merge_hypotheses` offsets and timestamp shifting for concatenated chunk outputs.
 - `test/test_asr_backend.py`: Validates backend/model aliases, Granite batching and decoding, text-only hypotheses, audio downmixing, and device validation without downloading model weights.
-- `test/test_asr_package.py`: Confirms the legacy `asr_backend` import path re-exports the canonical `asr` package objects.\n- `test/test_chunk_transcribe.py`: Also validates text overlap removal for timestamp-free ASR models across chunk and batch seams.
+- `test/test_asr_package.py`: Confirms the legacy `asr_backend` import path re-exports the canonical `asr` package objects.
+- `test/test_chunk_transcribe.py`: Also validates text overlap removal for timestamp-free ASR models across chunk and batch seams.
 - `test/test_health_endpoints.py`: Static checks that `/health` route decorators exist in `api.py` and `diarize_api.py`.
 - `test/test_diarization.py`: Validates shared speaker-label normalization and NeMo diarization output parsing without loading model weights.
+- `test/test_model_registry.py`: Validates startup model resolution, capabilities, and diarization eligibility.
+- `test/test_model_manager.py`: Validates failed model switches, restoration, and active-state invariants without loading model weights.
 - `test/test_merge_diarized.py`: Checks word-to-speaker assignment and segment grouping in `diarize_align` (including empty-turn handling).
 
 ## 1) Silence handling (artifact check)
