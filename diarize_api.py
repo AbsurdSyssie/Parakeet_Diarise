@@ -39,7 +39,6 @@ def health():
     }
 
 
-
 @app.post("/v1/diarize")
 async def diarize(file: UploadFile = File(...)):
     empty_cache = os.environ.get("DIARIZE_EMPTY_CACHE", "0") == "1"
@@ -57,7 +56,6 @@ async def diarize(file: UploadFile = File(...)):
         print(f"diarize in {diarize_elapsed:.2f}s")
         print(f"cuda mem after diarize: {cuda_mem()}")
 
-    turns.sort(key=lambda t: (t["start"], t["end"]))
     if empty_cache:
         gc.collect()
         if torch.cuda.is_available():
