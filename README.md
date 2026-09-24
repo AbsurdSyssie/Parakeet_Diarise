@@ -206,8 +206,12 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 
 | Path | Purpose |
 | --- | --- |
-| `api.py` | Main ASR and diarization API |
-| `asr/` | ASR adapters, model aliases, shared types, and backend dispatch |\n| `asr_backend.py` | Compatibility facade for the previous ASR import path |
+| `api.py` | FastAPI routes and transcription orchestration |
+| `settings.py` | Environment configuration |
+| `model_registry.py` | Runtime model config and capability checks |
+| `model_manager.py` | ASR model lifecycle, switching, and GPU state |
+| `asr/` | ASR adapters, canonical model registry, shared types, and backend dispatch |
+| `asr_backend.py` | Compatibility facade for the previous ASR import path |
 | `chunk_transcribe.py` | Chunk transcription |
 | `vad_chunk.py` | VAD and chunk generation |
 | `diarize_align.py` | Speaker-to-word alignment |
@@ -225,5 +229,6 @@ See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks
 - [Granite Speech](docs/granite.md)
 - [Audio tracing](docs/trace_audio.md)
 - [Tests](docs/tests.md)
+- [Architecture](docs/architecture.md)
 
 Historical experiment notes remain under `docs/`; unsupported executable experiments live under `legacy/`.
