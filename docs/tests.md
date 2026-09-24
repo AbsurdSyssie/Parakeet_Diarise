@@ -1,20 +1,43 @@
-# Tests (Critical)
+# Tests
 
-This file captures the most important tests to implement for ASR + VAD + diarization.
+Automated unit tests live in `tests/`. Manual API/model diagnostics live in `scripts/probes/`.
 
-## Current unit/behavior tests
-These are the tests that already exist in `test/` and what they validate:
-- `test/asr_debug_levers.py`: CLI harness that sweeps ASR API parameters (VAD, chunking, timestamps) and writes per-run JSON plus a `summary.json` with suspect-word and boundary diagnostics. Use it to compare boundary artifacts across settings.
-- `test/test_api_response.py`: Verifies `api_response.build_response` output shape, text override, and speaker list extraction.
-- `test/test_chunk_transcribe.py`: Validates `_merge_hypotheses` offsets and timestamp shifting for concatenated chunk outputs.
-- `test/test_asr_backend.py`: Validates backend/model aliases, Granite batching and decoding, text-only hypotheses, audio downmixing, and device validation without downloading model weights.
-- `test/test_asr_package.py`: Confirms the legacy `asr_backend` import path re-exports the canonical `asr` package objects.
-- `test/test_chunk_transcribe.py`: Also validates text overlap removal for timestamp-free ASR models across chunk and batch seams.
-- `test/test_health_endpoints.py`: Static checks that `/health` route decorators exist in `api.py` and `diarize_api.py`.
-- `test/test_diarization.py`: Validates shared speaker-label normalization and NeMo diarization output parsing without loading model weights.
-- `test/test_model_registry.py`: Validates startup model resolution, capabilities, and diarization eligibility.
-- `test/test_model_manager.py`: Validates failed model switches, restoration, and active-state invariants without loading model weights.
-- `test/test_merge_diarized.py`: Checks word-to-speaker assignment and segment grouping in `diarize_align` (including empty-turn handling).
+Run the dependency-light core suite with:
+
+```bash
+python -m unittest \
+  tests.test_api_response \
+  tests.test_asr_merge \
+  tests.test_diarize_align \
+  tests.test_merge_diarized \
+  tests.test_health_endpoints
+```
+
+The full unit suite includes tests that import PyTorch and ASR adapters and should be run in the project environment:
+
+```bash
+python -m unittest discover -s tests
+```
+
+## Current automated coverage
+
+- `tests/test_api_response.py`: response shape, text override, and speaker extraction
+- `tests/test_asr_backend.py`: backend aliases/adapters, Granite behaviour, audio preparation, and device validation
+- `tests/test_asr_merge.py`: chunk metadata, timestamp offsets, ordering, and overlap deduplication
+- `tests/test_asr_package.py`: compatibility of the legacy `asr_backend` import facade
+- `tests/test_chunk_transcribe.py`: chunk hypothesis offsets and timestamp-free overlap merging
+- `tests/test_diarization.py`: speaker normalization and diarization output parsing
+- `tests/test_diarize_align.py`: speaker assignment and segment grouping
+- `tests/test_health_endpoints.py`: presence of health routes and diarization health state
+- `tests/test_merge_diarized.py`: end-to-end word/turn alignment helpers
+- `tests/test_model_registry.py`: startup model resolution and capability rules
+- `tests/test_model_manager.py`: model-switch failure and restoration invariants
+
+## Manual probes
+
+See `scripts/probes/README.md`. Probe output defaults to `tmp/probes/` and is ignored by Git.
+
+## Integration checks still worth keeping
 
 ## 1) Silence handling (artifact check)
 Goal: ensure silence or low‑energy sections do **not** hallucinate tokens (e.g., “Aaron”).
