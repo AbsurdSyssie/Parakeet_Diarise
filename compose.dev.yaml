@@ -1,0 +1,5 @@
+services:
+  api:
+    volumes:
+      - .:/app
+      - ./Output/.cache:/app/.cache

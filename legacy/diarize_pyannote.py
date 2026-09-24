@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run pyannote diarization on a full file and emit speaker turns JSON."""
+"""Legacy pyannote diarization experiment. Not part of the supported runtime."""
 
 from __future__ import annotations
 

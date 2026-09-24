@@ -4,14 +4,14 @@ Run ASR API calls with different lever settings to debug boundary artifacts.
 
 Examples:
   # Baseline with force_vad on/off (word timestamps only)
-  .venv/bin/python test/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav --force-vad both --timestamps word
+  .venv/bin/python scripts/probes/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav --force-vad both --timestamps word
 
   # Sweep a single VAD override
-  .venv/bin/python test/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav \\
+  .venv/bin/python scripts/probes/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav \\
     --force-vad both --timestamps word --sweep-key vad_uniform_chunk_s --sweep-values 45,30,20
 
   # Sweep two overrides (cartesian product)
-  .venv/bin/python test/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav \\
+  .venv/bin/python scripts/probes/asr_debug_levers.py --audio Examples/MoreOrLessFull.wav \\
     --force-vad both --timestamps word --sweep-keys vad_uniform_chunk_s,vad_uniform_overlap_s \\
     --sweep-values 45,30,20 --sweep-values-2 0.5,0.2
 
@@ -26,13 +26,19 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Dict, Any, List, Tuple
 
 import requests
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-DEFAULT_URL = "http://localhost:8000/v1/audio/transcriptions"
-DEFAULT_OUT_DIR = "test/tmp/asr_debug_levers"
+from settings import SETTINGS
+
+DEFAULT_URL = f"http://localhost:{SETTINGS.api_port}/v1/audio/transcriptions"
+DEFAULT_OUT_DIR = "tmp/probes/asr_debug_levers"
 
 
 def parse_csv(value: str) -> List[str]:

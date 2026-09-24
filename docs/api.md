@@ -4,14 +4,43 @@ This repo exposes an OpenAI-style transcription endpoint with optional diarizati
 
 ## Services
 
-- ASR API: `http://localhost:8000`
-- Diarization runs in-process inside the ASR API via Sortformer when `diarization=true`.
+- ASR API: `http://localhost:$API_PORT` (`8000` by default)
+- Diarization runs in-process inside the ASR API through NeMo `SortformerEncLabelModel` when `diarization=true`. The default model is `nvidia/Nemotron-3-Diarization`.
 
 ## Build + run
 
+Set the API port and startup models in `.env`:
+
+```env
+API_PORT=8000
+ASR_BACKEND=nemo
+ASR_MODEL=parakeet-1.1b
+DIARIZATION_MODEL=nvidia/Nemotron-3-Diarization
+```
+
+Then run:
+
 ```bash
-docker compose build api
-docker compose up api
+docker compose up --build api
+```
+
+Compose publishes `API_PORT` and starts Uvicorn on the same container port. Shell variables can override `.env` for one run:
+
+```bash
+API_PORT=9000 ASR_MODEL=parakeet-0.6b docker compose up --build api
+```
+
+Without Docker:
+
+```bash
+python scripts/run_api.py
+python scripts/run_api.py --port 9000
+```
+
+For a development bind mount:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build api
 ```
 
 ## Current status
@@ -207,15 +236,16 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 
 ## Notes
 
-- `.env` must contain `HF_TOKEN` for diarization. Use `.env.example` as a template.
-- Current default VAD tuning: threshold 0.38, target_max 20s, hard_max 30s, overlap 1.0s, merge_gap 200ms, speech_pad 0ms.
-- VAD chunking uses 0ms padding by default.
+- Set `DIARIZATION_MODEL` to override the default `nvidia/Nemotron-3-Diarization`. The previous `nvidia/diar_streaming_sortformer_4spk-v2.1` model remains usable as a fallback.
+- Configure `HF_TOKEN` when the selected Hugging Face model requires authenticated access. Use `.env.example` as a template.
+- Current API defaults: threshold 0.30, target_max 20s, hard_max 30s, overlap 1.0s, merge_gap 200ms, speech_pad 250ms.
+- `force_vad=on` is the request default, so the RMS energy gate is bypassed unless `force_vad=off` is requested.
 - Default `chunk_mode=memory` avoids writing WAVs to disk, reduces decode/IO overhead, and keeps GPU utilization higher.
 - Use `chunk_mode=file` only if you need chunk WAVs persisted for debugging or if you suspect in-memory batching is unstable.
 - `diarization=true` requires `timestamps=word` because speaker alignment uses word-level timestamps.
 - In-memory chunking is the default for the API; file-based chunking is still available via `chunk_mode=file`.
 - Short `UNKNOWN` speaker segments (<=0.6s or <=2 words) are merged into neighboring segments; if the same speaker appears on both sides, the segments are coalesced.
-- Local Sortformer experiments live in `test/sortformer_dry.py` and `test/sortformer_align_dry.py`.
+- Manual diarization probes live in `scripts/probes/diarization_dry.py` and `scripts/probes/diarization_align.py`; both honor `DIARIZATION_MODEL`.
 - `VAD_DEVICE` can force VAD to CPU or CUDA.
 - `VAD_SAMPLE_RATE` lets you run VAD at 8 kHz while keeping ASR at 16 kHz. Timestamps remain in seconds.
 - `VAD_ENERGY_GATE=1` enables a cheap RMS energy gate before Silero. It scans 100 ms frames on CPU and only runs Silero on candidate regions. Tunables: `VAD_ENERGY_DB` (default `-35`), `VAD_ENERGY_FRAME_MS` (default `100`), `VAD_ENERGY_MIN_ACTIVE_MS` (default `500`), `VAD_ENERGY_MERGE_GAP_MS` (default `800`).
@@ -226,27 +256,3 @@ If `chunk_only=true`, the endpoint skips ASR and returns VAD chunk metadata:
 - Recommendation: keep `DIARIZE_TF32=0` for now; we did not see a consistent speedup.
 - `DISABLE_CUDA_GRAPHS=1` disables NeMo RNNT CUDA graph decoding to mitigate intermittent CUDA illegal memory access errors.
 - Energy gate fix validated via an in‑container 1s silence test using `run_vad_chunks_in_memory_from_waveform`.
-
-## Recent benchmarks
-
-Memory mode, `path/to/audio.wav`, diarization=false:
-- `timestamps=word`: 8.86s
-- `timestamps=segment`: 8.73s (~1.5% faster vs word)
-- `timestamps=none`: 7.62s (~14% faster vs word)
-
-Memory mode, `path/to/audio.wav`, diarization=true:
-- 16 kHz VAD, `VAD_DEVICE=cpu`: decode ~1.00s; VAD 5.95s; ASR 3.60s; diarization 10.04s; total 20.52s
-- 8 kHz VAD, `VAD_DEVICE=cuda`: decode 0.89s; VAD 7.40s; ASR 2.76s; diarization 9.88s; total 21.07s
-
-Energy gate test (1h audio, `VAD_ENERGY_GATE=1`, `VAD_DEVICE=cpu`, `VAD_SAMPLE_RATE=8000`):
-- energy gate found 2 intervals; decode 0.28s; VAD 25.60s; ASR 18.86s; diarization 49.51s; total 95.09s
-- Current energy gate settings in `.env`: `VAD_ENERGY_DB=-35`, `VAD_ENERGY_FRAME_MS=100`, `VAD_ENERGY_MIN_ACTIVE_MS=500`, `VAD_ENERGY_MERGE_GAP_MS=800`.
-- Proposed: run the cheap energy gate to estimate speech ratio; if active > ~70% of duration, skip Silero and chunk uniformly (30–45s with overlap) before ASR.
-Energy gate skip test (1h audio, ratio=1.00, `VAD_ENERGY_ACTIVE_SKIP=0.85`):
-- uniform intervals: 80; decode 0.30s; VAD 0.48s; ASR 15.61s; diarization 50.72s; total 67.86s
-- Takeaway: energy-gate skip removes most VAD cost, but diarization dominates total time.
-
-TF32 diarization comparison (same workload):
-- `DIARIZE_TF32=1`: diarization 54.40s / 53.11s; total 70.44s / 69.09s
-- `DIARIZE_TF32=0`: diarization 51.96s / 53.33s; total 68.26s / 69.26s
-- Conclusion: no consistent speedup from TF32 in this run.

@@ -10,6 +10,12 @@ import sys
 
 import httpx
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from settings import SETTINGS
+
 
 def _resolve_input(path: Path) -> Path:
     if path.exists():
@@ -31,8 +37,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--endpoint",
-        default="http://localhost:8000/v1/audio/transcriptions",
-        help="ASR endpoint URL (default: http://localhost:8000/v1/audio/transcriptions)",
+        default=f"http://localhost:{SETTINGS.api_port}/v1/audio/transcriptions",
+        help="ASR endpoint URL (default uses API_PORT from .env)",
     )
     parser.add_argument(
         "--input",
@@ -47,8 +53,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out",
-        default="test/tmp/asr_chunk_probe.json",
-        help="Output JSON path (default: test/tmp/asr_chunk_probe.json)",
+        default="tmp/probes/asr_chunk.json",
+        help="Output JSON path (default: tmp/probes/asr_chunk.json)",
     )
     return parser.parse_args()
 

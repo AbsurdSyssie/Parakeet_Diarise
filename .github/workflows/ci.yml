@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q             api.py api_response.py asr asr_backend.py asr_merge.py             chunk_transcribe.py diarization.py diarize_align.py diarize_api.py             model_manager.py model_registry.py settings.py vad_chunk.py             scripts tests
+
+      - name: Run dependency-free unit tests
+        run: |
+          python -m unittest             tests.test_api_response             tests.test_asr_merge             tests.test_diarize_align             tests.test_merge_diarized             tests.test_health_endpoints \
+            tests.test_settings

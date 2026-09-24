@@ -1,188 +1,270 @@
 # Parakeet + Diarise
 
-ASR + diarization service built around Parakeet transcription and Sortformer diarization. The API exposes an OpenAI-style `/v1/audio/transcriptions` endpoint with optional diarization. Runtime-selectable ASR adapters include Parakeet, Whisper, faster-whisper, Cohere Transcribe, and IBM Granite Speech.
+A GPU speech-to-text API with speaker diarization.
+
+It exposes an OpenAI-style transcription endpoint, lets you switch ASR models at runtime, and can attach speaker labels to word-level transcripts.
+
+The default diarization model is [NVIDIA Nemotron 3 Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization), loaded through NeMo's `SortformerEncLabelModel`.
+
+## Features
+
+- OpenAI-style `POST /v1/audio/transcriptions` endpoint
+- Runtime-selectable ASR models
+- Nemotron 3 speaker diarization
+- Word, segment, or text-only timestamps
+- Speaker attribution from ASR word timestamps
+- Silero VAD with configurable chunking
+- In-memory or file-backed chunk processing
+- Docker setup for NVIDIA GPUs
+
+Supported ASR backends include NVIDIA Parakeet and Nemotron ASR, Whisper, faster-whisper, Cohere Transcribe, and IBM Granite Speech.
 
 ## Quick start
 
-```bash
-docker compose build api
-docker compose up api
-```
-
-API guide: `docs/api.md`
-
-One-off command-line transcription:
+Create your local environment file:
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cu13/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-python transcribe_parakeet.py Examples/output_10s.mp3 \
-  --backend transformers-asr \
-  --model granite-speech-4.1-2b-nar \
-  --timestamps none
+cp .env.example .env
 ```
 
-The historical `transcribe_parakeet.py AUDIO` command remains valid. Use
-`--backend` and `--model` to select another adapter.
+Add a Hugging Face token if the model you use requires one:
 
-## API (what to send + what you get back)
+```env
+HF_TOKEN=...
+```
 
-### Endpoints
+Choose the server port and startup models in `.env`:
 
-ASR API (main service, `api.py`):
+```env
+API_PORT=8000
+ASR_BACKEND=nemo
+ASR_MODEL=parakeet-1.1b
+DIARIZATION_MODEL=nvidia/Nemotron-3-Diarization
+```
 
-- `POST /v1/audio/transcriptions` (multipart/form-data)
-- `GET /health`
-- `GET /v1/models`
-- `GET /v1/models/current`
-- `POST /v1/models/current`
+Build and start the API:
 
-Standalone diarization service (optional, `diarize_api.py`):
+```bash
+docker compose up --build api
+```
 
-- `POST /v1/diarize` (multipart/form-data)
-- `GET /health`
+The API listens on `http://localhost:$API_PORT` (port `8000` by default). Compose uses the same port inside and outside the container.
 
-### `POST /v1/audio/transcriptions`
+For a one-off override without editing `.env`:
 
-Required form fields:
+```bash
+API_PORT=9000 ASR_MODEL=parakeet-0.6b docker compose up --build api
+```
 
-- `file` (WAV/FLAC/MP3)
-- `response_format=verbose_json` (only supported value)
+For live source mounts during development:
 
-Optional form fields:
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up --build api
+```
 
-- `diarization=true|false` (default `false`)
-- `timestamps=word|segment|none` (default `word`)
-- `language=en` (default `en`)
-- `chunk_mode=memory|file` (default `memory`)
-- `chunk_only=true|false` (default `false`)
-- `trace_audio=true|false` (default `false`)
-- `force_vad=off|on` (default `off`)
-- Per-request VAD overrides:
-  - `vad_sample_rate`, `vad_threshold`, `vad_min_speech_ms`, `vad_min_silence_ms`
-  - `vad_merge_gap_ms`, `vad_target_min_s`, `vad_target_max_s`, `vad_hard_max_s`
-  - `vad_overlap_s`, `vad_speech_pad_ms`
-  - `vad_energy_gate`, `vad_energy_db`, `vad_energy_frame_ms`, `vad_energy_min_active_ms`
-  - `vad_energy_merge_gap_ms`, `vad_energy_active_skip`
-  - `vad_uniform_chunk_s`, `vad_uniform_overlap_s`
+The normal `compose.yaml` runs the code baked into the image; the development override mounts the checkout into `/app`.
 
-Validation behavior:
+To run the API without Docker, the launcher reads the same `.env`:
 
-- `response_format` must be `verbose_json`
-- `timestamps` must be `word`, `segment`, or `none`
-- `chunk_mode` must be `memory` or `file`
-- `diarization=true` requires `timestamps=word`
-- `force_vad` must be `off` or `on`
+```bash
+python scripts/run_api.py
+python scripts/run_api.py --port 9000
+```
 
-Response (top-level):
+`transcribe_parakeet.py` runs models directly and does not use an HTTP port.
+
+## Transcribe audio
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "response_format=verbose_json" \
+  -F "timestamps=word" \
+  -F "diarization=true"
+```
+
+A diarized response looks like this:
 
 ```json
 {
   "text": "Hello world.",
   "language": "en",
   "duration": 12.34,
-  "words": [...],
-  "segments": [...],
-  "speakers": ["SPEAKER_00", "SPEAKER_01"]
+  "words": [
+    {
+      "word": "Hello",
+      "start": 0.0,
+      "end": 0.42,
+      "speaker": "SPEAKER_00"
+    }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "speaker": "SPEAKER_00",
+      "start": 0.0,
+      "end": 1.2,
+      "text": "Hello world."
+    }
+  ],
+  "speakers": ["SPEAKER_00"]
 }
 ```
 
-If `timestamps=word`, `words[]` is populated and `segments[]` is derived from words.
-If `timestamps=segment`, `segments[]` is populated and `words[]` is empty.
-If `timestamps=none`, both arrays are empty and `text` is a plain string transcript.
+Diarization requires `timestamps=word` because speaker turns are aligned to ASR word timestamps.
 
-Chunk-only response (`chunk_only=true`) returns VAD metadata only and skips ASR:
+For the full request schema, VAD controls, and response formats, see [docs/api.md](docs/api.md).
 
-```json
-{
-  "ok": true,
-  "chunk_only": true,
-  "chunk_mode": "memory",
-  "duration": 123.45,
-  "sample_rate": 16000,
-  "vad_sample_rate": 16000,
-  "vad_params": { "...": "..." },
-  "chunks": [ { "...": "..." } ]
-}
+## ASR models
+
+The API loads one ASR model at a time. List the available models:
+
+```bash
+curl http://localhost:8000/v1/models
 ```
 
-### `POST /v1/diarize` (optional standalone service)
+Show the active model:
 
-Required form fields:
+```bash
+curl http://localhost:8000/v1/models/current
+```
 
-- `file` (WAV/FLAC/MP3)
+Switch models without restarting the service:
 
-Response is a list of speaker turns:
+```bash
+curl -X POST http://localhost:8000/v1/models/current \
+  -H "Content-Type: application/json" \
+  -d '{"model":"parakeet-1.1b"}'
+```
+
+The curated model registry currently includes:
+
+| Model | Backend | Timestamps | Diarization |
+| --- | --- | --- | --- |
+| Parakeet TDT 0.6B v3 | NeMo | word + segment | yes |
+| Parakeet TDT 1.1B | NeMo | word + segment | yes |
+| Nemotron 3.5 ASR Streaming 0.6B | NeMo | word + segment | yes |
+| Medical Whisper Large v3 | Transformers | word + segment | yes |
+| faster-whisper Large v3 | CTranslate2 | word + segment | yes |
+| Cohere Transcribe | Transformers | text only | no |
+| Granite Speech 4.1 2B NAR | Transformers | text only | no |
+
+Text-only models cannot use diarization because the alignment stage needs word timestamps.
+
+## Diarization
+
+The main API runs diarization in-process.
+
+By default it loads:
+
+```env
+DIARIZATION_MODEL=nvidia/Nemotron-3-Diarization
+```
+
+To use the previous four-speaker Sortformer checkpoint instead:
+
+```env
+DIARIZATION_MODEL=nvidia/diar_streaming_sortformer_4spk-v2.1
+```
+
+The application converts input audio to mono 16 kHz, runs the diarizer over the full recording, then assigns its speaker turns to ASR words.
+
+See [docs/sortformer.md](docs/sortformer.md) for model and inference details.
+
+## Configuration
+
+Start from `.env.example`.
+
+The main settings are:
+
+| Variable | Purpose |
+| --- | --- |
+| `API_PORT` | API listener and Docker-published port (default `8000`) |
+| `ASR_BACKEND` | ASR backend used at startup |
+| `ASR_MODEL` | ASR model or registry key used at startup |
+| `DIARIZATION_MODEL` | NeMo diarization checkpoint |
+| `HF_TOKEN` | Hugging Face authentication |
+| `VAD_DEVICE` | Run VAD on `cpu` or `cuda` |
+| `VAD_SAMPLE_RATE` | Sample rate used by VAD |
+| `DISABLE_CUDA_GRAPHS` | Disable NeMo RNNT CUDA graph decoding |
+
+VAD thresholds, chunk sizes, overlap, padding, and energy-gate settings are documented in [docs/api.md](docs/api.md).
+
+## Standalone diarization API
+
+`diarize_api.py` can run diarization as a separate service.
+
+It exposes:
+
+- `POST /v1/diarize`
+- `GET /health`
+
+A diarization response is a list of speaker turns:
 
 ```json
 [
-  { "start": 0.0, "end": 1.23, "speaker": "SPEAKER_00" }
+  {
+    "start": 0.0,
+    "end": 1.23,
+    "speaker": "SPEAKER_00"
+  }
 ]
 ```
 
-Full request/response examples and schemas live in `docs/api.md`.
+## Command-line transcription
 
-## Environment variables
+The original command-line entry point remains available:
 
-Use `.env.example` as the template. Common settings:
+```bash
+python transcribe_parakeet.py audio.wav
+```
 
-- `ASR_BACKEND`
-- `ASR_MODEL`
-- `ASR_TRUST_REMOTE_CODE`
-- `ASR_RETURN_TIMESTAMPS`
-- `ASR_ATTENTION_IMPLEMENTATION` (`sdpa`, `eager`, or optional `flash_attention_2`)
-- `HF_TOKEN` (required for diarization downloads)
-- `DIARIZE_URL` (external diarize service URL if used)
-- `DIARIZE_EMPTY_CACHE` (1 to `gc.collect()` + reset CUDA stats after diarize)
-- `DIARIZE_TF32` (1 to enable TF32 in CUDA matmul/cudnn)
-- `VAD_DEVICE` (`cpu` or `cuda`)
-- `VAD_SAMPLE_RATE`
-- `VAD_THRESHOLD`
-- `VAD_MIN_SPEECH_MS`
-- `VAD_MIN_SILENCE_MS`
-- `VAD_MERGE_GAP_MS`
-- `VAD_TARGET_MIN_S`
-- `VAD_TARGET_MAX_S`
-- `VAD_HARD_MAX_S`
-- `VAD_OVERLAP_S`
-- `VAD_SPEECH_PAD_MS`
-- `VAD_ENERGY_GATE`
-- `VAD_ENERGY_DB`
-- `VAD_ENERGY_FRAME_MS`
-- `VAD_ENERGY_MIN_ACTIVE_MS`
-- `VAD_ENERGY_MERGE_GAP_MS`
-- `VAD_ENERGY_ACTIVE_SKIP`
-- `VAD_UNIFORM_CHUNK_S`
-- `VAD_UNIFORM_OVERLAP_S`
-- `DISABLE_CUDA_GRAPHS` (1 to disable NeMo RNNT CUDA graph decoding)
+You can select another backend and model:
 
-See `docs/api.md` for detailed VAD/energy-gate behavior and defaults.
-
-## Docs
-
-- `docs/api.md` - endpoint, parameters, examples, response schema
-- `docs/granite.md` - IBM Granite Speech setup, CLI/API usage, and limitations
-- `docs/parakeet.md` - Parakeet notes and container guidance
-- `docs/pyannote.md` - legacy pyannote notes
-- `docs/sortformer.md` - Sortformer diarization notes
-- `docs/trace_audio.md` - chunk tracing and diagnostics
-- `docs/tests.md` - test plan + existing tests
-- `docs/Parakeet_Progress.md` - progress log
-- `docs/sortformer_progress.md` - diarization progress log
-- `docs/VAD_energy_gate_issue.md` - VAD energy gate investigation
-- `docs/brief.md` - project brief
+```bash
+python transcribe_parakeet.py audio.wav \
+  --backend transformers-asr \
+  --model granite-speech-4.1-2b-nar \
+  --timestamps none
+```
 
 ## Tests
 
-Unit/behavior tests live in `test/`. See `docs/tests.md` for what each test does and the planned test matrix.
+Automated tests live in `tests/`. Manual diagnostics live in `scripts/probes/`.
 
-## Repo layout
+See [docs/tests.md](docs/tests.md) for the current test matrix and manual checks.
 
-- `api.py` - ASR API service
-- `diarize_api.py` - diarization API wiring
-- `diarize_align.py` / `merge_diarized.py` - word/segment alignment helpers
-- `vad_chunk.py` - VAD chunking logic
-- `chunk_transcribe.py` / `asr_merge.py` - ASR chunking and merge utilities
-- `Dockerfile`, `compose.yaml` - container setup
+## Repository layout
 
-Ignored runtime artifacts (expected): `.venv/`, `Output/`, `__pycache__/`.
+| Path | Purpose |
+| --- | --- |
+| `api.py` | FastAPI routes and transcription orchestration |
+| `settings.py` | Environment configuration |
+| `model_registry.py` | Runtime model config and capability checks |
+| `model_manager.py` | ASR model lifecycle, switching, and GPU state |
+| `asr/` | ASR adapters, canonical model registry, shared types, and backend dispatch |
+| `asr_backend.py` | Compatibility facade for the previous ASR import path |
+| `chunk_transcribe.py` | Chunk transcription |
+| `vad_chunk.py` | VAD and chunk generation |
+| `diarize_align.py` | Speaker-to-word alignment |
+| `diarize_api.py` | Optional standalone diarization API |
+| `scripts/` | API launcher, CLI utilities, and manual probes |
+| `tests/` | Automated unit tests |
+| `docs/` | Current API, architecture, model, and test documentation |
+| `docs/archive/` | Historical implementation notes and progress logs |
+| `legacy/` | Unsupported executable experiments kept for reference |
+| `Dockerfile` | CUDA/Python runtime |
+| `compose.yaml` | Built-image runtime service |
+| `compose.dev.yaml` | Development bind-mount override |
+
+## Further reading
+
+- [API guide](docs/api.md)
+- [Diarization](docs/sortformer.md)
+- [Parakeet notes](docs/parakeet.md)
+- [Granite Speech](docs/granite.md)
+- [Audio tracing](docs/trace_audio.md)
+- [Tests](docs/tests.md)
+- [Architecture](docs/architecture.md)
+
+Historical implementation notes live under `docs/archive/`; unsupported executable experiments live under `legacy/`.

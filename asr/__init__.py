@@ -1,30 +1,28 @@
-#!/usr/bin/env python3
-"""Compatibility facade for the ASR backend package.
+"""ASR backends and model resolution."""
 
-New code should import from `asr`. This module keeps the original public
-imports working for existing callers.
-"""
-
-from asr import (
-    ASRConfig,
+from .faster_whisper import FasterWhisperASRBackend
+from .granite import GraniteASRBackend
+from .loader import load_asr_backend
+from .nemo import load_nemo_asr_model
+from .nemotron import NemotronASRBackend
+from .registry import (
     FASTER_WHISPER_MODEL_ALIASES,
+    MODEL_REGISTRY,
+    ModelSpec,
     NEMO_MODEL_ALIASES,
     TRANSFORMERS_ASR_MODEL_ALIASES,
     WHISPER_MODEL_ALIASES,
-    FasterWhisperASRBackend,
-    GraniteASRBackend,
-    NemotronASRBackend,
-    SimpleHypothesis,
-    TransformersASRBackend,
-    WhisperASRBackend,
-    load_asr_backend,
-    load_nemo_asr_model,
     resolve_asr_model,
 )
+from .transformers import TransformersASRBackend
+from .types import ASRConfig, SimpleHypothesis
+from .whisper import WhisperASRBackend
 
 __all__ = [
     "ASRConfig",
     "SimpleHypothesis",
+    "ModelSpec",
+    "MODEL_REGISTRY",
     "NEMO_MODEL_ALIASES",
     "WHISPER_MODEL_ALIASES",
     "FASTER_WHISPER_MODEL_ALIASES",

@@ -18,23 +18,22 @@ RUN apt-get update \
  && add-apt-repository ppa:deadsnakes/ppa \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3.11-distutils \
+    python3.12 \
+    python3.12-venv \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python3.11 -m ensurepip \
- && python3.11 -m pip install -U pip
+RUN python3.12 -m ensurepip \
+ && python3.12 -m pip install -U pip
 
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
 
-RUN python3.11 -m pip install --upgrade \
+RUN python3.12 -m pip install --upgrade \
     --index-url https://download.pytorch.org/whl/cu121 \
     --extra-index-url https://pypi.org/simple \
     -r /app/requirements.txt
 
 COPY . /app
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn api:app --host 0.0.0.0 --port ${API_PORT:-8000}"]
